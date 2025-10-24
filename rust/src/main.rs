@@ -1,28 +1,129 @@
-use kuchiki::traits::*;
-use kuchiki::{NodeRef, parse_html};
-use sha2::{Sha256, Digest};
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::io::Read;
-use walkdir::WalkDir;
 use chrono::Local;
+use kuchiki::traits::*;
+use kuchiki::{parse_html, NodeRef};
+use notify::{RecursiveMode, Watcher};
+use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use notify::{Watcher, RecursiveMode};
+use std::time::{Duration, Instant};
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 struct SlotSpec {
     name: String,
     mode: String,
     layout_tag: String,
-    in_head: bool,
+    self_closing: bool,
 }
+
+#[derive(Debug, Clone)]
+struct PageSlotContent {
+    tag: String,
+    inner_html: String,
+    attributes: HashMap<String, String>,
+    original_html: Option<String>,
+    self_closing: bool,
+}
+
+const VOID_TAGS: [&str; 14] = [
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
 
 struct Compiler {
     src_dir: PathBuf,
     out_dir: PathBuf,
     layout_path: PathBuf,
+}
+
+impl PageSlotContent {
+    fn render(&self, prefer_self_closing: bool) -> String {
+        if let Some(original) = &self.original_html {
+            original.clone()
+        } else {
+            let should_self_close = self.self_closing || prefer_self_closing;
+            Self::build_markup(
+                &self.tag,
+                &self.attributes,
+                &self.inner_html,
+                should_self_close,
+            )
+        }
+    }
+
+    fn build_markup(
+        tag: &str,
+        attributes: &HashMap<String, String>,
+        inner_html: &str,
+        self_closing: bool,
+    ) -> String {
+        let mut attrs: Vec<(&String, &String)> = attributes.iter().collect();
+        attrs.sort_by(|a, b| match (a.0.as_str(), b.0.as_str()) {
+            ("for-slot", "for-slot") => Ordering::Equal,
+            ("for-slot", _) => Ordering::Less,
+            (_, "for-slot") => Ordering::Greater,
+            _ => a.0.cmp(b.0),
+        });
+
+        let mut attr_string = String::new();
+        for (key, value) in attrs {
+            attr_string.push(' ');
+            attr_string.push_str(key);
+            attr_string.push_str("=\"");
+            attr_string.push_str(&value.replace('"', "&quot;"));
+            attr_string.push('"');
+        }
+
+        if self_closing {
+            format!("<{}{} />", tag, attr_string)
+        } else {
+            format!("<{}{}>{}</{}>", tag, attr_string, inner_html, tag)
+        }
+    }
+}
+
+fn is_void_element(tag: &str) -> bool {
+    let lower = tag.to_ascii_lowercase();
+    VOID_TAGS.contains(&lower.as_str())
+}
+
+fn detect_layout_self_closing(layout_html: &str, tag: &str, slot_name: &str) -> bool {
+    let pattern = format!(
+        r#"(?is)<{tag}\b[^>]*\bslot\s*=\s*["']{slot}["'][^>]*>"#,
+        tag = regex::escape(tag),
+        slot = regex::escape(slot_name)
+    );
+
+    if let Ok(re) = regex::Regex::new(&pattern) {
+        if let Some(mat) = re.find(layout_html) {
+            let snippet = mat.as_str().trim_end();
+            if snippet.ends_with("/>") {
+                return true;
+            }
+            if snippet.ends_with(">") && snippet.contains("/>") {
+                return true;
+            }
+        }
+    }
+
+    is_void_element(tag)
+}
+fn format_with_commas(value: u128) -> String {
+    let digits: Vec<char> = value.to_string().chars().collect();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (idx, ch) in digits.iter().rev().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            formatted.push(',');
+        }
+        formatted.push(*ch);
+    }
+
+    formatted.chars().rev().collect()
 }
 
 fn main() {
@@ -117,6 +218,7 @@ fn main() {
 
 impl Compiler {
     fn build_once(&self) -> bool {
+        let start = Instant::now();
         let now = Local::now();
         println!("[Build] {}", now.format("%H:%M:%S"));
 
@@ -141,15 +243,14 @@ impl Compiler {
             let name = attrs.get("slot").unwrap_or("").to_string();
             let mode = attrs.get("slot-mode").unwrap_or("html").to_string();
             let layout_tag = node.as_element().unwrap().name.local.to_string();
-
-            // Detect if in head
-            let in_head = self.is_in_head(node);
+            let self_closing =
+                detect_layout_self_closing(&layout_html, &layout_tag, &name);
 
             slots.push(SlotSpec {
                 name,
                 mode,
                 layout_tag,
-                in_head,
+                self_closing,
             });
         }
 
@@ -195,27 +296,57 @@ impl Compiler {
 
             let page_doc = parse_html().one(page_html.clone());
 
-            // Extract page slots
-            let mut page_map: HashMap<String, String> = HashMap::new();
+            // Extract page slots with metadata for normalization
+            let mut page_slots: HashMap<String, PageSlotContent> = HashMap::new();
+            let mut page_slot_order: Vec<String> = Vec::new();
 
             for element in page_doc.select("[for-slot]").unwrap() {
                 let node = element.as_node();
-                let attrs = node.as_element().unwrap().attributes.borrow();
+                let attrs_ref = node.as_element().unwrap().attributes.borrow();
 
-                if let Some(slot_name) = attrs.get("for-slot") {
-                    if !page_map.contains_key(slot_name) {
-                        // Get inner HTML of this element
+                if let Some(slot_name) = attrs_ref.get("for-slot") {
+                    if !page_slots.contains_key(slot_name) {
+                        let slot_name_string = slot_name.to_string();
+                        let tag_name = node.as_element().unwrap().name.local.to_string();
+
+                        let mut attributes = HashMap::new();
+                        for (attr_name, attr_value) in attrs_ref.map.iter() {
+                            attributes.insert(
+                                attr_name.local.to_string(),
+                                attr_value.value.clone(),
+                            );
+                        }
+
+                        let outer_html = self.get_outer_html(node);
                         let inner_html = self.get_inner_html(node);
-                        page_map.insert(slot_name.to_string(), inner_html);
+
+                        page_slot_order.push(slot_name_string.clone());
+                        let trimmed_outer = outer_html.trim_end();
+                        let self_closing = trimmed_outer.ends_with("/>")
+                            && !trimmed_outer.contains("</");
+
+                        page_slots.insert(
+                            slot_name_string,
+                            PageSlotContent {
+                                tag: tag_name,
+                                inner_html,
+                                attributes,
+                                original_html: if outer_html.is_empty() {
+                                    None
+                                } else {
+                                    Some(outer_html)
+                                },
+                                self_closing,
+                            },
+                        );
                     }
                 }
             }
 
             // Check for unknown slots
-            let layout_names: std::collections::HashSet<_> =
-                slots.iter().map(|s| s.name.clone()).collect();
+            let layout_names: HashSet<_> = slots.iter().map(|s| s.name.clone()).collect();
             let mut extra = Vec::new();
-            for slot_name in page_map.keys() {
+            for slot_name in page_slots.keys() {
                 if !layout_names.contains(slot_name) {
                     extra.push(slot_name.clone());
                 }
@@ -231,12 +362,81 @@ impl Compiler {
                 continue;
             }
 
+            let expected_order: Vec<String> = slots
+                .iter()
+                .filter(|slot| page_slots.contains_key(&slot.name))
+                .map(|slot| slot.name.clone())
+                .collect();
+            let order_changed = page_slot_order != expected_order;
+
+            let mut page_slots_for_merge = page_slots.clone();
+            let mut missing_slots = Vec::new();
+            for slot in &slots {
+                if !page_slots_for_merge.contains_key(&slot.name) {
+                    missing_slots.push(slot.name.clone());
+                    page_slots_for_merge.insert(
+                        slot.name.clone(),
+                        self.default_slot_provider(slot),
+                    );
+                }
+            }
+
+            if !missing_slots.is_empty() {
+                println!(
+                    "[Normalize] Added missing slots in {}: {}",
+                    file_name,
+                    missing_slots.join(", ")
+                );
+            }
+
+            if order_changed {
+                println!("[Normalize] Reordered slots to match layout for {}", file_name);
+            }
+
+            let uses_crlf = page_html.contains("\r\n");
+            let had_trailing_newline =
+                page_html.ends_with('\n') || page_html.ends_with("\r\n");
+
+            let mut normalized_blocks = Vec::new();
+            for slot in &slots {
+                if let Some(content) = page_slots_for_merge.get(&slot.name) {
+                    normalized_blocks.push(content.render(slot.self_closing));
+                }
+            }
+
+            let normalized_join = normalized_blocks.join("\n\n");
+            let normalized_compare = normalized_join.trim_end_matches('\n').to_string();
+
+            let original_compare = page_html
+                .replace("\r\n", "\n")
+                .trim_end_matches('\n')
+                .to_string();
+
+            if normalized_compare != original_compare {
+                let mut final_text = normalized_compare.clone();
+                if had_trailing_newline {
+                    final_text.push('\n');
+                }
+                if uses_crlf {
+                    final_text = final_text.replace("\n", "\r\n");
+                }
+
+                if let Err(e) = fs::write(&path, &final_text) {
+                    eprintln!("[Error] {}", e);
+                    overall_ok = false;
+                    continue;
+                } else {
+                    println!("[Normalize] Wrote {}", file_name);
+                }
+            }
+
             // Build output by merging page slots into layout (string-based to preserve whitespace)
             let mut output_html = layout_html.clone();
 
             for slot in &slots {
-                if let Some(content) = page_map.get(&slot.name) {
-                    output_html = self.merge_slot_string(&output_html, &slot, content);
+                if let Some(content) = page_slots_for_merge.get(&slot.name) {
+                    output_html =
+                        self.merge_slot_string(&output_html, slot, content);
                 }
             }
 
@@ -252,23 +452,13 @@ impl Compiler {
         }
 
         self.copy_assets_diff();
-        println!("[Build] Complete.\n");
+        let elapsed_ms = start.elapsed().as_millis();
+        println!(
+            "[Build] Complete in {} ms.\n",
+            format_with_commas(elapsed_ms)
+        );
 
         overall_ok
-    }
-
-    fn is_in_head(&self, node: &NodeRef) -> bool {
-        // Walk up the tree to find if we're inside a <head> element
-        let mut current = node.parent();
-        while let Some(parent) = current {
-            if let Some(element) = parent.as_element() {
-                if element.name.local.to_string() == "head" {
-                    return true;
-                }
-            }
-            current = parent.parent();
-        }
-        false
     }
 
     fn get_inner_html(&self, node: &NodeRef) -> String {
@@ -279,10 +469,89 @@ impl Compiler {
             child.serialize(&mut child_html).ok();
             result.extend(child_html);
         }
+        String::from_utf8_lossy(&result).to_string()
+    }
+
+    fn get_outer_html(&self, node: &NodeRef) -> String {
+        let mut result = Vec::new();
+        node.serialize(&mut result).ok();
         String::from_utf8_lossy(&result).trim().to_string()
     }
 
-    fn merge_slot_string(&self, html: &str, slot: &SlotSpec, content: &str) -> String {
+    fn default_slot_provider(&self, slot: &SlotSpec) -> PageSlotContent {
+        let mut attributes: HashMap<String, String> = HashMap::new();
+        attributes.insert("for-slot".to_string(), slot.name.clone());
+
+        if let Some(attr_name) = slot.mode.strip_prefix("attr:") {
+            attributes.insert(attr_name.to_string(), String::new());
+        }
+
+        // Keep defaults blank so normalized pages clearly signal fields to fill in.
+        PageSlotContent {
+            tag: slot.layout_tag.clone(),
+            inner_html: String::new(),
+            attributes,
+            original_html: None,
+            self_closing: slot.self_closing,
+        }
+    }
+
+    fn merge_slot_string(
+        &self,
+        html: &str,
+        slot: &SlotSpec,
+        content: &PageSlotContent,
+    ) -> String {
+        if slot.self_closing {
+            let pattern = format!(
+                r#"(?is)(<{tag}\b[^>]*\bslot\s*=\s*["']{name}["'][^>]*)(\s*/?>)"#,
+                tag = regex::escape(&slot.layout_tag),
+                name = regex::escape(&slot.name)
+            );
+
+            let re = regex::Regex::new(&pattern).unwrap();
+
+            return re
+                .replace(html, |caps: &regex::Captures| {
+                    let mut opening_tag = caps[1].to_string();
+                    let ending = &caps[2];
+
+                    opening_tag = opening_tag
+                        .replace(&format!(r#" slot="{}""#, slot.name), "")
+                        .replace(
+                            &format!(r#" slot-mode="{}""#, slot.mode),
+                            "",
+                        )
+                        .replace(r#" slot-mode="text""#, "")
+                        .replace(r#" slot-mode="html""#, "");
+
+                    let opening_tag = opening_tag.trim_end();
+
+                    match slot.mode.as_str() {
+                        mode if mode.starts_with("attr:") => {
+                            let attr_name = &mode[5..];
+                            if let Some(value) = content.attributes.get(attr_name)
+                            {
+                                let mut builder = opening_tag.to_string();
+                                if !builder.ends_with(' ') {
+                                    builder.push(' ');
+                                }
+                                builder.push_str(attr_name);
+                                builder.push_str("=\"");
+                                builder.push_str(value);
+                                builder.push('"');
+
+                                format!("{}{}", builder, ending)
+                            } else {
+                                format!("{}{}", opening_tag, ending)
+                            }
+                        }
+                        _ => format!("{}{}", opening_tag, ending),
+                    }
+                })
+                .to_string();
+        }
+
         // Build the search pattern for the slot element
         // Match: <tag ...slot="name"...>...</tag>
         let pattern = format!(
@@ -306,31 +575,23 @@ impl Compiler {
             match slot.mode.as_str() {
                 "text" => {
                     // For text mode, insert content as plain text
-                    format!("{}{}{}", cleaned_tag, content, closing_tag)
+                    format!("{}{}{}", cleaned_tag, &content.inner_html, closing_tag)
                 }
                 mode if mode.starts_with("attr:") => {
-                    // For attr mode, extract attribute value from content and add to tag
+                    // For attr mode, copy attribute value from the provider element
                     let attr_name = &mode[5..];
 
-                    // Simple attribute extraction
-                    if let Some(attr_start) = content.find(&format!(r#"{}=""#, attr_name)) {
-                        let value_start = attr_start + attr_name.len() + 2;
-                        if let Some(value_end) = content[value_start..].find('"') {
-                            let attr_value = &content[value_start..value_start + value_end];
-
-                            // Insert attribute into opening tag
-                            let tag_with_attr = cleaned_tag.replace(">", &format!(r#" {}="{}">"#, attr_name, attr_value));
-                            format!("{}{}", tag_with_attr, closing_tag)
-                        } else {
-                            format!("{}{}", cleaned_tag, closing_tag)
-                        }
+                    if let Some(value) = content.attributes.get(attr_name) {
+                        let tag_with_attr = cleaned_tag
+                            .replace(">", &format!(r#" {}="{}">"#, attr_name, value));
+                        format!("{}{}", tag_with_attr, closing_tag)
                     } else {
                         format!("{}{}", cleaned_tag, closing_tag)
                     }
                 }
                 _ => {
                     // For html mode (default), insert content as HTML
-                    format!("{}{}{}", cleaned_tag, content, closing_tag)
+                    format!("{}{}{}", cleaned_tag, &content.inner_html, closing_tag)
                 }
             }
         }).to_string()
