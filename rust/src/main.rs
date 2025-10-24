@@ -231,23 +231,18 @@ impl Compiler {
                 continue;
             }
 
-            // Build output by merging page slots into layout
-            let output_doc = parse_html().one(layout_html.clone());
+            // Build output by merging page slots into layout (string-based to preserve whitespace)
+            let mut output_html = layout_html.clone();
 
             for slot in &slots {
                 if let Some(content) = page_map.get(&slot.name) {
-                    self.merge_slot(&output_doc, &slot, content);
+                    output_html = self.merge_slot_string(&output_html, &slot, content);
                 }
             }
 
-            // Serialize output
-            let mut output_html = Vec::new();
-            output_doc.serialize(&mut output_html).unwrap();
-            let output_str = String::from_utf8_lossy(&output_html).to_string();
-
             let dest_path = self.out_dir.join(&file_name);
             let _ = fs::create_dir_all(dest_path.parent().unwrap());
-            if let Err(e) = fs::write(&dest_path, &output_str) {
+            if let Err(e) = fs::write(&dest_path, &output_html) {
                 eprintln!("[Error] {}", e);
                 overall_ok = false;
                 continue;
@@ -287,68 +282,58 @@ impl Compiler {
         String::from_utf8_lossy(&result).trim().to_string()
     }
 
-    fn merge_slot(&self, doc: &NodeRef, slot: &SlotSpec, content: &str) {
-        // Find the slot element in the document
-        let selector = format!("[slot=\"{}\"]", slot.name);
-        if let Ok(matches) = doc.select(&selector) {
-            for element in matches {
-                let node = element.as_node();
+    fn merge_slot_string(&self, html: &str, slot: &SlotSpec, content: &str) -> String {
+        // Build the search pattern for the slot element
+        // Match: <tag ...slot="name"...>...</tag>
+        let pattern = format!(
+            r#"(<{}\s[^>]*slot="{}[^>]*>)(.*?)(</{}>)"#,
+            slot.layout_tag, slot.name, slot.layout_tag
+        );
 
-                // Clear existing children
-                for child in node.children() {
-                    child.detach();
+        let re = regex::Regex::new(&pattern).unwrap();
+
+        re.replace(html, |caps: &regex::Captures| {
+            let opening_tag = &caps[1];
+            let closing_tag = &caps[3];
+
+            // Remove slot and slot-mode attributes from opening tag
+            let cleaned_tag = opening_tag
+                .replace(&format!(r#" slot="{}""#, slot.name), "")
+                .replace(&format!(r#" slot-mode="{}""#, slot.mode), "")
+                .replace(r#" slot-mode="text""#, "")
+                .replace(r#" slot-mode="html""#, "");
+
+            match slot.mode.as_str() {
+                "text" => {
+                    // For text mode, insert content as plain text
+                    format!("{}{}{}", cleaned_tag, content, closing_tag)
                 }
+                mode if mode.starts_with("attr:") => {
+                    // For attr mode, extract attribute value from content and add to tag
+                    let attr_name = &mode[5..];
 
-                // Handle different slot modes
-                match slot.mode.as_str() {
-                    "text" => {
-                        // For text mode, insert as text node (no HTML parsing)
-                        let text = kuchiki::NodeRef::new_text(content.trim());
-                        node.append(text);
-                    }
-                    mode if mode.starts_with("attr:") => {
-                        // For attr mode, set the attribute on the slot element
-                        let attr_name = &mode[5..];
+                    // Simple attribute extraction
+                    if let Some(attr_start) = content.find(&format!(r#"{}=""#, attr_name)) {
+                        let value_start = attr_start + attr_name.len() + 2;
+                        if let Some(value_end) = content[value_start..].find('"') {
+                            let attr_value = &content[value_start..value_start + value_end];
 
-                        // Parse the content to extract the attribute value
-                        let attr_doc = parse_html().one(content);
-                        if let Ok(matches) = attr_doc.select(&format!("[{}]", attr_name)) {
-                            if let Some(element) = matches.into_iter().next() {
-                                let attrs = element.as_node().as_element().unwrap().attributes.borrow();
-                                if let Some(attr_value) = attrs.get(attr_name) {
-                                    let mut slot_attrs = node.as_element().unwrap().attributes.borrow_mut();
-                                    slot_attrs.insert(attr_name, attr_value.to_string());
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        // For html mode (default), parse and insert as nodes
-                        let content_doc = parse_html().one(content);
-
-                        // kuchiki wraps fragments in <html><body>, so extract body children
-                        if let Ok(body_matches) = content_doc.select("body") {
-                            if let Some(body_element) = body_matches.into_iter().next() {
-                                let body_node = body_element.as_node();
-                                for child in body_node.children() {
-                                    node.append(child.clone());
-                                }
-                            }
+                            // Insert attribute into opening tag
+                            let tag_with_attr = cleaned_tag.replace(">", &format!(r#" {}="{}">"#, attr_name, attr_value));
+                            format!("{}{}", tag_with_attr, closing_tag)
                         } else {
-                            // Fallback: just append all children
-                            for child in content_doc.children() {
-                                node.append(child.clone());
-                            }
+                            format!("{}{}", cleaned_tag, closing_tag)
                         }
+                    } else {
+                        format!("{}{}", cleaned_tag, closing_tag)
                     }
                 }
-
-                // Remove slot attributes from final output
-                let mut slot_attrs = node.as_element().unwrap().attributes.borrow_mut();
-                slot_attrs.remove("slot");
-                slot_attrs.remove("slot-mode");
+                _ => {
+                    // For html mode (default), insert content as HTML
+                    format!("{}{}{}", cleaned_tag, content, closing_tag)
+                }
             }
-        }
+        }).to_string()
     }
 
     fn copy_assets_diff(&self) {
