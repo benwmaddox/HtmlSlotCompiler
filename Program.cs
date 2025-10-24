@@ -210,6 +210,10 @@ file sealed class SiteCompiler(string srcDir, string outDir, string layoutPath)
                         }
                         break;
                 }
+
+                // Remove slot attributes from final output
+                layoutEl.RemoveAttribute("slot");
+                layoutEl.RemoveAttribute("slot-mode");
             }
 
             var destPath = Path.Combine(_out, fileName);
