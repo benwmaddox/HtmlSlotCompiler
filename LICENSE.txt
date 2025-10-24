@@ -1,0 +1,33 @@
+HtmlSlotCompiler License
+Copyright © 2025 Ben Maddox. All rights reserved.
+
+Permission is hereby granted to any individual or organization ("User") to
+download, compile, and use the HtmlSlotCompiler software (the "Software")
+for personal, educational, or commercial purposes provided that all of the following conditions are met:
+
+No Modification or Derivative Works
+The User may not modify, fork, rebrand, translate, or otherwise create
+derivative works of the Software or its source code.
+
+No Redistribution of Modified Versions
+The User may distribute unmodified copies of the Software's source code or
+compiled binaries, provided this license and attribution remain intact.
+Distribution of altered or derivative versions is prohibited.
+
+Attribution
+All copies of the Software must retain this license text and clear
+attribution to the original author, Ben Maddox.
+
+No Sale or Relicensing
+The Software may not be sold, sublicensed, or incorporated into a paid
+product or service without prior written consent of the author.
+
+No Transfer of Ownership
+This license does not grant any ownership rights, trademarks, or branding
+associated with HtmlSlotCompiler.
+
+Disclaimer
+The Software is provided "AS IS", without warranty of any kind, express or implied,
+including but not limited to the warranties of merchantability, fitness for a
+particular purpose, and non-infringement. In no event shall the author be liable
+for any claim, damages, or other liability arising from the use of the Software.
