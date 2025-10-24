@@ -5,17 +5,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
-    <!-- Optimized for single native executable per platform -->
+    <!-- Optimized for single native executable (Windows x64) -->
     <PublishAot>true</PublishAot>
     <PublishTrimmed>true</PublishTrimmed>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
-  <!-- Platform-specific configurations -->
+  <!-- Release build optimization: no debug symbols, no stack trace data for size reduction -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <DebugType>embedded</DebugType>
+    <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
   </PropertyGroup>
 
   <ItemGroup>

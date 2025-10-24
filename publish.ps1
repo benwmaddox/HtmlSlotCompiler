@@ -1,61 +1,46 @@
-# Cross-platform AOT publishing script for HtmlSlotCompiler
-# Publishes to all major architectures and operating systems
+# AOT publishing script for HtmlSlotCompiler (Windows x64)
+# Produces a single native executable
 
 $ErrorActionPreference = "Stop"
 
 # Ensure vswhere is in PATH for Visual Studio Build Tools detection
 $vsInstallerPath = "C:\Program Files (x86)\Microsoft Visual Studio\Installer"
 if (!(Test-Path $vsInstallerPath)) {
-    Write-Host "Error: Visual Studio Build Tools not found. Install from https://visualstudio.microsoft.com/downloads/" -ForegroundColor Red
+    Write-Host "Error: Visual Studio Build Tools not found." -ForegroundColor Red
+    Write-Host "Install from: https://visualstudio.microsoft.com/downloads/" -ForegroundColor Yellow
     exit 1
 }
 $env:PATH = "$vsInstallerPath;$env:PATH"
 
-# Define target platforms
-$platforms = @(
-    @{ rid = "win-x64"; os = "Windows"; arch = "x64" },
-    @{ rid = "win-arm64"; os = "Windows"; arch = "ARM64" },
-    @{ rid = "linux-x64"; os = "Linux"; arch = "x64" },
-    @{ rid = "linux-arm64"; os = "Linux"; arch = "ARM64" },
-    @{ rid = "osx-x64"; os = "macOS"; arch = "x64" },
-    @{ rid = "osx-arm64"; os = "macOS"; arch = "ARM64" }
-)
+# Publish configuration
+$outputDir = "publish"
+$exeName = "SiteCompiler.exe"
+$binPath = "bin\Release\net8.0\win-x64\publish\$exeName"
 
-# Create publish directory
-$publishDir = "publish"
-if (!(Test-Path $publishDir)) {
-    New-Item -ItemType Directory -Path $publishDir | Out-Null
-}
+Write-Host "Building $exeName (Windows x64 AOT)..." -ForegroundColor Cyan
 
-Write-Host "Building HtmlSlotCompiler for all platforms..." -ForegroundColor Cyan
-Write-Host ""
+try {
+    # Build with dotnet publish
+    dotnet publish -c Release | Out-Null
 
-foreach ($platform in $platforms) {
-    $rid = $platform.rid
-    $os = $platform.os
-    $arch = $platform.arch
-    $outputDir = Join-Path $publishDir "$rid"
-    $exeName = if ($rid.StartsWith("win")) { "SiteCompiler.exe" } else { "SiteCompiler" }
-
-    Write-Host "[$os/$arch] Publishing for runtime identifier: $rid" -ForegroundColor Yellow
-
-    try {
-        dotnet publish -c Release -r $rid `
-            -o $outputDir 2>&1 | Out-Null
-
-        $exePath = Join-Path $outputDir $exeName
-        if (Test-Path $exePath) {
-            $size = (Get-Item $exePath).Length / 1MB
-            Write-Host "  [OK] Success: $exePath ($([Math]::Round($size, 2)) MB)" -ForegroundColor Green
-        } else {
-            Write-Host "  [FAIL] Error: Executable not found at $exePath" -ForegroundColor Red
-        }
-    } catch {
-        Write-Host "  [FAIL] Error: $_" -ForegroundColor Red
+    # Copy executable to publish folder
+    if (!(Test-Path $outputDir)) {
+        New-Item -ItemType Directory -Path $outputDir | Out-Null
     }
+    Copy-Item $binPath -Destination $outputDir -Force
 
-    Write-Host ""
+    $exePath = Join-Path $outputDir $exeName
+    if (Test-Path $exePath) {
+        $size = (Get-Item $exePath).Length / 1MB
+        Write-Host "[OK] Built: $exePath ($([Math]::Round($size, 2)) MB)" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Ready to use:" -ForegroundColor Cyan
+        Write-Host "  .\$exeName <source-dir> <output-dir>" -ForegroundColor White
+    } else {
+        Write-Host "[FAIL] Executable not found at $exePath" -ForegroundColor Red
+        exit 1
+    }
+} catch {
+    Write-Host "[FAIL] Build error: $_" -ForegroundColor Red
+    exit 1
 }
-
-Write-Host "Publishing complete!" -ForegroundColor Cyan
-Write-Host "Binaries available in: $publishDir" -ForegroundColor Green

@@ -1,57 +1,38 @@
 #!/bin/bash
-# Cross-platform AOT publishing script for HtmlSlotCompiler
-# Publishes to all major architectures and operating systems
+# AOT publishing script for HtmlSlotCompiler (Windows x64)
+# Produces a single native executable
 
 set -e
 
 # On Windows with Visual Studio Build Tools, ensure vswhere is in PATH
 if [ -f "/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" ]; then
     export PATH="/c/Program Files (x86)/Microsoft Visual Studio/Installer:$PATH"
-elif [ -f "/opt/hostedtoolcache/windows/msvc-toolchain" ]; then
-    # CI environments may have it elsewhere
-    export PATH="/opt/hostedtoolcache/windows/msvc-toolchain:$PATH"
 fi
 
-# Define target platforms
-declare -a PLATFORMS=(
-    "win-x64:Windows:x64"
-    "win-arm64:Windows:ARM64"
-    "linux-x64:Linux:x64"
-    "linux-arm64:Linux:ARM64"
-    "osx-x64:macOS:x64"
-    "osx-arm64:macOS:ARM64"
-)
+# Publish configuration
+OUTPUT_DIR="publish"
+EXE_NAME="SiteCompiler.exe"
+BIN_PATH="bin/Release/net8.0/win-x64/publish/$EXE_NAME"
 
-# Create publish directory
-PUBLISH_DIR="publish"
-mkdir -p "$PUBLISH_DIR"
+echo "Building $EXE_NAME (Windows x64 AOT)..."
 
-echo "Building HtmlSlotCompiler for all platforms..."
-echo ""
+if dotnet publish -c Release 2>&1 > /dev/null; then
+    # Copy executable to publish folder
+    mkdir -p "$OUTPUT_DIR"
+    cp "$BIN_PATH" "$OUTPUT_DIR/"
 
-for platform in "${PLATFORMS[@]}"; do
-    IFS=':' read -r RID OS ARCH <<< "$platform"
-    OUTPUT_DIR="$PUBLISH_DIR/$RID"
-    EXE_NAME=$([ "$RID" = "${RID#win}" ] && echo "SiteCompiler" || echo "SiteCompiler.exe")
-
-    echo "[$OS/$ARCH] Publishing for runtime identifier: $RID"
-
-    if dotnet publish -c Release -r "$RID" \
-        -o "$OUTPUT_DIR" 2>&1 > /dev/null; then
-
-        EXE_PATH="$OUTPUT_DIR/$EXE_NAME"
-        if [ -f "$EXE_PATH" ]; then
-            SIZE=$(ls -lh "$EXE_PATH" | awk '{print $5}')
-            echo "  [OK] Success: $EXE_PATH ($SIZE)"
-        else
-            echo "  [FAIL] Error: Executable not found at $EXE_PATH"
-        fi
+    EXE_PATH="$OUTPUT_DIR/$EXE_NAME"
+    if [ -f "$EXE_PATH" ]; then
+        SIZE=$(ls -lh "$EXE_PATH" | awk '{print $5}')
+        echo "[OK] Built: $EXE_PATH ($SIZE)"
+        echo ""
+        echo "Ready to use:"
+        echo "  ./$EXE_NAME <source-dir> <output-dir>"
     else
-        echo "  [FAIL] Error: Build failed for $RID"
+        echo "[FAIL] Executable not found at $EXE_PATH" >&2
+        exit 1
     fi
-
-    echo ""
-done
-
-echo "Publishing complete!"
-echo "Binaries available in: $PUBLISH_DIR"
+else
+    echo "[FAIL] Build failed" >&2
+    exit 1
+fi
