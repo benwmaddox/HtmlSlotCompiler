@@ -33,7 +33,7 @@ Your source files (`src/*.html`) will be normalized automatically to match `_lay
 <html>
   <head>
     <title slot="title" slot-mode="text"></title>
-    <meta name="description" slot="description" slot-mode="attr:content">
+    <meta name="description" slot="description" slot-mode="attr:content" />
   </head>
   <body>
     <header slot="header"></header>
@@ -47,7 +47,7 @@ Each page defines providers for these slots:
 
 ```html
 <title for-slot="title">About Us</title>
-<meta for-slot="description" content="Learn about our team.">
+<meta for-slot="description" content="Learn about our team." />
 <section for-slot="header"><h1>About</h1></section>
 <section for-slot="content"><p>We build cool things.</p></section>
 <section for-slot="footer"><p>© 2025 Example</p></section>
@@ -79,16 +79,16 @@ This makes it ideal for:
 
 ## ⚙️ Features
 
-| Feature | Description |
-|---------|-------------|
-| ✅ Pure HTML | No templating syntax, no front matter |
-| ✅ Strict enforcement | Missing → added, out-of-order → reordered |
-| ✅ Errors on extras | Keeps schema clean |
-| ✅ Proper DOM manipulation | Uses kuchiki for correct HTML parsing |
-| ✅ Single binary | Compiles to 1.5MB native executable (Rust) |
-| ✅ Smart asset copying | Copies CSS/JS/images only if changed (SHA256 hash) |
-| ✅ Watch mode | `--watch` flag for continuous builds with debouncing |
-| ⚡ Fast | 29ms build time for 2 pages |
+| Feature                    | Description                                          |
+| -------------------------- | ---------------------------------------------------- |
+| ✅ Pure HTML               | No templating syntax, no front matter                |
+| ✅ Strict enforcement      | Missing → added, out-of-order → reordered            |
+| ✅ Errors on extras        | Keeps schema clean                                   |
+| ✅ Proper DOM manipulation | Uses kuchiki for correct HTML parsing                |
+| ✅ Single binary           | Compiles to 1.5MB native executable (Rust)           |
+| ✅ Smart asset copying     | Copies CSS/JS/images only if changed (SHA256 hash)   |
+| ✅ Watch mode              | `--watch` flag for continuous builds with debouncing |
+| ⚡ Fast                    | 29ms build time for 2 pages                          |
 
 ## 🧰 Usage
 
@@ -102,13 +102,13 @@ site-compiler src dist --watch
 
 ### Behavior
 
-| Case | Result |
-|------|--------|
-| Missing slot | Auto-added empty `<section for-slot="name"></section>` |
-| Wrong order | Reordered to match layout |
-| Extra slot | Error (page skipped) |
-| Different structure | Source HTML rewritten in normalized order |
-| Assets changed | Copied with hash comparison |
+| Case                | Result                                                 |
+| ------------------- | ------------------------------------------------------ |
+| Missing slot        | Auto-added empty `<section for-slot="name"></section>` |
+| Wrong order         | Reordered to match layout                              |
+| Extra slot          | Error (page skipped)                                   |
+| Different structure | Source HTML rewritten in normalized order              |
+| Assets changed      | Copied with hash comparison                            |
 
 ## 🏗️ Build & Publish
 
@@ -121,15 +121,15 @@ Produces a single 1.5MB executable in `rust/target/release/site-compiler.exe` (W
 
 ## 🧮 Comparison
 
-| Feature | HtmlSlotCompiler | Eleventy | Astro | Jekyll/Hugo |
-|---------|-----------------|----------|-------|-------------|
-| Templating syntax | ❌ none | ✅ Liquid/Nunjucks | ✅ JSX/MDX | ✅ Liquid/Go |
-| Strict layout order | ✅ | ⚠️ optional | ⚠️ | ⚠️ |
-| Auto-normalize source | ✅ | ❌ | ❌ | ❌ |
-| Dynamic data | ❌ | ✅ | ✅ | ✅ |
-| Startup speed | ⚡ instant | 🐢 slow | 🐇 fast | ⚙️ medium |
-| HTML validity in editors | ✅ 100% | ⚠️ often broken | ❌ | ⚠️ |
-| Ideal use | schema-driven static HTML | content blogs | component sites | markdown blogs |
+| Feature                  | HtmlSlotCompiler          | Eleventy           | Astro           | Jekyll/Hugo    |
+| ------------------------ | ------------------------- | ------------------ | --------------- | -------------- |
+| Templating syntax        | ❌ none                   | ✅ Liquid/Nunjucks | ✅ JSX/MDX      | ✅ Liquid/Go   |
+| Strict layout order      | ✅                        | ⚠️ optional        | ⚠️              | ⚠️             |
+| Auto-normalize source    | ✅                        | ❌                 | ❌              | ❌             |
+| Dynamic data             | ❌                        | ✅                 | ✅              | ✅             |
+| Startup speed            | ⚡ instant                | 🐢 slow            | 🐇 fast         | ⚙️ medium      |
+| HTML validity in editors | ✅ 100%                   | ⚠️ often broken    | ❌              | ⚠️             |
+| Ideal use                | schema-driven static HTML | content blogs      | component sites | markdown blogs |
 
 ## 🧩 Example Repo Layout
 
@@ -162,3 +162,9 @@ Use freely, but you cannot modify or redistribute altered versions. See `LICENSE
 ---
 
 Built by Ben Maddox.
+
+# Run samples on Windows:
+
+```
+rust/target/release/site-compiler.exe sample/src sample/dist --watch
+```
