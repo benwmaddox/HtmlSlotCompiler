@@ -33,10 +33,6 @@ foreach ($platform in $platforms) {
 
     try {
         dotnet publish -c Release -r $rid `
-            -p:PublishAot=true `
-            -p:PublishTrimmed=true `
-            -p:InvariantGlobalization=true `
-            -p:SelfContained=true `
             -o $outputDir 2>&1 | Out-Null
 
         $exePath = Join-Path $outputDir $exeName

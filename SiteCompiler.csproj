@@ -5,11 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
-    <!-- Trimmed for smaller binaries; AOT can be enabled via -p:PublishAot=true -->
+    <!-- Optimized for smaller binaries -->
+    <!-- Set -p:PublishAot=true to produce single native executable (requires Visual Studio Build Tools + C++) -->
     <PublishTrimmed>true</PublishTrimmed>
     <InvariantGlobalization>true</InvariantGlobalization>
-
-    <!-- AOT already produces a single executable -->
     <SelfContained>true</SelfContained>
   </PropertyGroup>
 

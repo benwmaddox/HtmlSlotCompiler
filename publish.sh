@@ -29,10 +29,6 @@ for platform in "${PLATFORMS[@]}"; do
     echo -e "\033[33m[$OS/$ARCH] Publishing for runtime identifier: $RID\033[0m"
 
     if dotnet publish -c Release -r "$RID" \
-        -p:PublishAot=true \
-        -p:PublishTrimmed=true \
-        -p:InvariantGlobalization=true \
-        -p:SelfContained=true \
         -o "$OUTPUT_DIR" 2>&1 > /dev/null; then
 
         EXE_PATH="$OUTPUT_DIR/$EXE_NAME"
