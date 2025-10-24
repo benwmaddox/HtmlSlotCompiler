@@ -4,6 +4,14 @@
 
 set -e
 
+# On Windows with Visual Studio Build Tools, ensure vswhere is in PATH
+if [ -f "/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" ]; then
+    export PATH="/c/Program Files (x86)/Microsoft Visual Studio/Installer:$PATH"
+elif [ -f "/opt/hostedtoolcache/windows/msvc-toolchain" ]; then
+    # CI environments may have it elsewhere
+    export PATH="/opt/hostedtoolcache/windows/msvc-toolchain:$PATH"
+fi
+
 # Define target platforms
 declare -a PLATFORMS=(
     "win-x64:Windows:x64"
@@ -18,7 +26,7 @@ declare -a PLATFORMS=(
 PUBLISH_DIR="publish"
 mkdir -p "$PUBLISH_DIR"
 
-echo -e "\033[36mBuilding HtmlSlotCompiler for all platforms...\033[0m"
+echo "Building HtmlSlotCompiler for all platforms..."
 echo ""
 
 for platform in "${PLATFORMS[@]}"; do
@@ -26,7 +34,7 @@ for platform in "${PLATFORMS[@]}"; do
     OUTPUT_DIR="$PUBLISH_DIR/$RID"
     EXE_NAME=$([ "$RID" = "${RID#win}" ] && echo "SiteCompiler" || echo "SiteCompiler.exe")
 
-    echo -e "\033[33m[$OS/$ARCH] Publishing for runtime identifier: $RID\033[0m"
+    echo "[$OS/$ARCH] Publishing for runtime identifier: $RID"
 
     if dotnet publish -c Release -r "$RID" \
         -o "$OUTPUT_DIR" 2>&1 > /dev/null; then
@@ -34,16 +42,16 @@ for platform in "${PLATFORMS[@]}"; do
         EXE_PATH="$OUTPUT_DIR/$EXE_NAME"
         if [ -f "$EXE_PATH" ]; then
             SIZE=$(ls -lh "$EXE_PATH" | awk '{print $5}')
-            echo -e "  \033[32m✔ Success: $EXE_PATH ($SIZE)\033[0m"
+            echo "  [OK] Success: $EXE_PATH ($SIZE)"
         else
-            echo -e "  \033[31m✗ Error: Executable not found at $EXE_PATH\033[0m"
+            echo "  [FAIL] Error: Executable not found at $EXE_PATH"
         fi
     else
-        echo -e "  \033[31m✗ Error: Build failed for $RID\033[0m"
+        echo "  [FAIL] Error: Build failed for $RID"
     fi
 
     echo ""
 done
 
-echo -e "\033[36mPublishing complete!\033[0m"
-echo -e "\033[32mBinaries available in: $PUBLISH_DIR\033[0m"
+echo "Publishing complete!"
+echo "Binaries available in: $PUBLISH_DIR"

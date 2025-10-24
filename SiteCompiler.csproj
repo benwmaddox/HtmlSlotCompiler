@@ -5,8 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
-    <!-- Optimized for smaller binaries -->
-    <!-- Set -p:PublishAot=true to produce single native executable (requires Visual Studio Build Tools + C++) -->
+    <!-- Optimized for single native executable per platform -->
+    <PublishAot>true</PublishAot>
     <PublishTrimmed>true</PublishTrimmed>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SelfContained>true</SelfContained>

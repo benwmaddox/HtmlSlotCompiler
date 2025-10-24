@@ -3,6 +3,14 @@
 
 $ErrorActionPreference = "Stop"
 
+# Ensure vswhere is in PATH for Visual Studio Build Tools detection
+$vsInstallerPath = "C:\Program Files (x86)\Microsoft Visual Studio\Installer"
+if (!(Test-Path $vsInstallerPath)) {
+    Write-Host "Error: Visual Studio Build Tools not found. Install from https://visualstudio.microsoft.com/downloads/" -ForegroundColor Red
+    exit 1
+}
+$env:PATH = "$vsInstallerPath;$env:PATH"
+
 # Define target platforms
 $platforms = @(
     @{ rid = "win-x64"; os = "Windows"; arch = "x64" },
@@ -38,12 +46,12 @@ foreach ($platform in $platforms) {
         $exePath = Join-Path $outputDir $exeName
         if (Test-Path $exePath) {
             $size = (Get-Item $exePath).Length / 1MB
-            Write-Host "  ✔ Success: $exePath ($('{0:F2}' -f $size) MB)" -ForegroundColor Green
+            Write-Host "  [OK] Success: $exePath ($([Math]::Round($size, 2)) MB)" -ForegroundColor Green
         } else {
-            Write-Host "  ✗ Error: Executable not found at $exePath" -ForegroundColor Red
+            Write-Host "  [FAIL] Error: Executable not found at $exePath" -ForegroundColor Red
         }
     } catch {
-        Write-Host "  ✗ Error: $_" -ForegroundColor Red
+        Write-Host "  [FAIL] Error: $_" -ForegroundColor Red
     }
 
     Write-Host ""
