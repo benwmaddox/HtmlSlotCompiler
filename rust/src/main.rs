@@ -9,6 +9,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
@@ -87,7 +88,9 @@ impl PageSlotContent {
         match closing_style {
             SlotClosingStyle::SelfClosing => format!("<{}{} />", tag, attr_string),
             SlotClosingStyle::Void => format!("<{}{}>", tag, attr_string),
-            SlotClosingStyle::Explicit => format!("<{}{}>{}</{}>", tag, attr_string, inner_html, tag),
+            SlotClosingStyle::Explicit => {
+                format!("<{}{}>{}</{}>", tag, attr_string, inner_html, tag)
+            }
         }
     }
 }
@@ -97,11 +100,7 @@ fn is_void_element(tag: &str) -> bool {
     VOID_TAGS.contains(&lower.as_str())
 }
 
-fn determine_closing_style(
-    layout_html: &str,
-    tag: &str,
-    slot_name: &str,
-) -> SlotClosingStyle {
+fn determine_closing_style(layout_html: &str, tag: &str, slot_name: &str) -> SlotClosingStyle {
     let pattern = format!(
         r#"(?is)<{tag}\b[^>]*\bslot\s*=\s*["']{slot}["'][^>]*>"#,
         tag = regex::escape(tag),
@@ -207,6 +206,7 @@ fn main() {
         out_dir: out_dir.clone(),
         layout_path,
     };
+    compiler.clean_output_dir();
 
     let ok = compiler.build_once(None);
     if !watch {
@@ -227,8 +227,8 @@ fn main() {
 
     let (tx, rx) = std::sync::mpsc::channel();
 
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        match res {
+    let mut watcher =
+        match notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
             Ok(event) => {
                 for path in event.paths {
                     let is_tmp = path
@@ -243,14 +243,13 @@ fn main() {
                 }
             }
             Err(_) => {}
-        }
-    }) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("[Error] {}", e);
-            return;
-        }
-    };
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[Error] {}", e);
+                return;
+            }
+        };
 
     let _ = watcher.watch(&src_dir_clone, RecursiveMode::Recursive);
 
@@ -260,9 +259,7 @@ fn main() {
     loop {
         match rx.recv_timeout(Duration::from_millis(150)) {
             Ok(path) => {
-                let normalized = path
-                    .canonicalize()
-                    .unwrap_or(path.clone());
+                let normalized = path.canonicalize().unwrap_or(path.clone());
                 pending_clone.lock().unwrap().insert(normalized);
                 timer_active = true;
                 last_build = std::time::Instant::now();
@@ -313,8 +310,7 @@ impl Compiler {
             let name = attrs.get("slot").unwrap_or("").to_string();
             let mode = attrs.get("slot-mode").unwrap_or("html").to_string();
             let layout_tag = node.as_element().unwrap().name.local.to_string();
-            let closing_style =
-                determine_closing_style(&layout_html, &layout_tag, &name);
+            let closing_style = determine_closing_style(&layout_html, &layout_tag, &name);
 
             slots.push(SlotSpec {
                 name,
@@ -329,8 +325,7 @@ impl Compiler {
         }
 
         let mut overall_ok = true;
-        let layout_names: HashSet<String> =
-            slots.iter().map(|s| s.name.clone()).collect();
+        let layout_names: HashSet<String> = slots.iter().map(|s| s.name.clone()).collect();
 
         let src_dir_canonical = self
             .src_dir
@@ -342,10 +337,42 @@ impl Compiler {
         if let Some(paths) = changed_paths {
             if paths.is_empty() {
                 full_rebuild = true;
+            } else if paths.iter().any(|path| self.path_missing_with_retry(path)) {
+                full_rebuild = true;
             } else if paths.iter().any(|path| {
                 self.path_matches_layout(path, &layout_aliases, src_dir_canonical.as_path())
             }) {
                 full_rebuild = true;
+            }
+        }
+
+        if !full_rebuild {
+            if let Ok(entries) = fs::read_dir(&self.src_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !self.is_html_file(&path) {
+                        continue;
+                    }
+                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) => name,
+                        None => continue,
+                    };
+                    if file_name.eq_ignore_ascii_case("_layout.html") {
+                        continue;
+                    }
+                    if !self.out_dir.join(file_name).exists() {
+                        full_rebuild = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(paths) = changed_paths {
+            for path in paths {
+                if self.path_missing_with_retry(path) {
+                    self.remove_output_for_path(path);
+                }
             }
         }
 
@@ -362,11 +389,8 @@ impl Compiler {
 
             for entry in entries.flatten() {
                 let path = entry.path();
-                if let Some(page_path) = self.normalize_watch_path(
-                    &path,
-                    src_dir_canonical.as_path(),
-                    &layout_aliases,
-                )
+                if let Some(page_path) =
+                    self.normalize_watch_path(&path, src_dir_canonical.as_path(), &layout_aliases)
                 {
                     page_paths.push(page_path);
                 }
@@ -374,11 +398,8 @@ impl Compiler {
         } else if let Some(paths) = changed_paths {
             let mut seen = HashSet::new();
             for path in paths {
-                if let Some(page_path) = self.normalize_watch_path(
-                    path,
-                    src_dir_canonical.as_path(),
-                    &layout_aliases,
-                )
+                if let Some(page_path) =
+                    self.normalize_watch_path(path, src_dir_canonical.as_path(), &layout_aliases)
                 {
                     if seen.insert(page_path.clone()) {
                         page_paths.push(page_path);
@@ -423,10 +444,8 @@ impl Compiler {
 
                         let mut attributes = HashMap::new();
                         for (attr_name, attr_value) in attrs_ref.map.iter() {
-                            attributes.insert(
-                                attr_name.local.to_string(),
-                                attr_value.value.clone(),
-                            );
+                            attributes
+                                .insert(attr_name.local.to_string(), attr_value.value.clone());
                         }
 
                         let outer_html = self.get_outer_html(node);
@@ -435,8 +454,7 @@ impl Compiler {
                         page_slot_order.push(slot_name_string.clone());
                         let trimmed_outer = outer_html.trim_end();
                         let lower_outer = trimmed_outer.to_ascii_lowercase();
-                        let closing_probe =
-                            format!("</{}>", tag_name.to_ascii_lowercase());
+                        let closing_probe = format!("</{}>", tag_name.to_ascii_lowercase());
 
                         let closing_style = if trimmed_outer.ends_with("/>") {
                             SlotClosingStyle::SelfClosing
@@ -496,10 +514,8 @@ impl Compiler {
             for slot in &slots {
                 if !page_slots_for_merge.contains_key(&slot.name) {
                     missing_slots.push(slot.name.clone());
-                    page_slots_for_merge.insert(
-                        slot.name.clone(),
-                        self.default_slot_provider(slot),
-                    );
+                    page_slots_for_merge
+                        .insert(slot.name.clone(), self.default_slot_provider(slot));
                 }
             }
 
@@ -512,12 +528,14 @@ impl Compiler {
             }
 
             if order_changed {
-                println!("[Normalize] Reordered slots to match layout for {}", file_name);
+                println!(
+                    "[Normalize] Reordered slots to match layout for {}",
+                    file_name
+                );
             }
 
             let uses_crlf = page_html.contains("\r\n");
-            let had_trailing_newline =
-                page_html.ends_with('\n') || page_html.ends_with("\r\n");
+            let had_trailing_newline = page_html.ends_with('\n') || page_html.ends_with("\r\n");
 
             let mut normalized_blocks = Vec::new();
             for slot in &slots {
@@ -563,8 +581,7 @@ impl Compiler {
 
             for slot in &slots {
                 if let Some(content) = page_slots_for_merge.get(&slot.name) {
-                    output_html =
-                        self.merge_slot_string(&output_html, slot, content);
+                    output_html = self.merge_slot_string(&output_html, slot, content);
                 }
             }
 
@@ -671,6 +688,19 @@ impl Compiler {
             .unwrap_or(false)
     }
 
+    fn path_missing_with_retry(&self, path: &Path) -> bool {
+        if path.exists() {
+            return false;
+        }
+        for _ in 0..3 {
+            thread::sleep(Duration::from_millis(10));
+            if path.exists() {
+                return false;
+            }
+        }
+        true
+    }
+
     fn get_inner_html(&self, node: &NodeRef) -> String {
         // Get the inner HTML by serializing all children
         let mut result = Vec::new();
@@ -706,12 +736,7 @@ impl Compiler {
         }
     }
 
-    fn merge_slot_string(
-        &self,
-        html: &str,
-        slot: &SlotSpec,
-        content: &PageSlotContent,
-    ) -> String {
+    fn merge_slot_string(&self, html: &str, slot: &SlotSpec, content: &PageSlotContent) -> String {
         if matches!(
             slot.closing_style,
             SlotClosingStyle::SelfClosing | SlotClosingStyle::Void
@@ -781,8 +806,8 @@ impl Compiler {
                     let attr_name = &mode[5..];
 
                     if let Some(value) = content.attributes.get(attr_name) {
-                        let tag_with_attr = opening_tag
-                            .replace(">", &format!(r#" {}="{}">"#, attr_name, value));
+                        let tag_with_attr =
+                            opening_tag.replace(">", &format!(r#" {}="{}">"#, attr_name, value));
                         format!("{}{}", tag_with_attr, closing_tag)
                     } else {
                         format!("{}{}", opening_tag, closing_tag)
@@ -793,7 +818,8 @@ impl Compiler {
                     format!("{}{}{}", opening_tag, &content.inner_html, closing_tag)
                 }
             }
-        }).to_string()
+        })
+        .to_string()
     }
 
     fn copy_assets_diff(&self) {
@@ -828,6 +854,133 @@ impl Compiler {
                 }
             }
         }
+    }
+
+    fn clean_output_dir(&self) {
+        let expected = self.expected_output_set();
+
+        if !self.out_dir.exists() {
+            let _ = fs::create_dir_all(&self.out_dir);
+            return;
+        }
+
+        let mut files_to_remove = Vec::new();
+        for entry in WalkDir::new(&self.out_dir)
+            .min_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            let rel = match path.strip_prefix(&self.out_dir) {
+                Ok(p) => p.to_path_buf(),
+                Err(_) => continue,
+            };
+
+            if path.is_file() && !expected.contains(&rel) {
+                files_to_remove.push(path.to_path_buf());
+            }
+        }
+
+        for file in files_to_remove {
+            let rel = file.strip_prefix(&self.out_dir).unwrap_or(file.as_path());
+            if let Err(e) = fs::remove_file(&file) {
+                eprintln!("[Warn] Failed to remove {}: {}", rel.display(), e);
+            } else {
+                println!("[Cleanup] Removed {}", rel.display());
+            }
+        }
+
+        // Remove empty directories deepest first
+        let mut dirs: Vec<PathBuf> = WalkDir::new(&self.out_dir)
+            .min_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.path().to_path_buf())
+            .collect();
+
+        dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
+
+        for dir in dirs {
+            if let Ok(mut entries) = fs::read_dir(&dir) {
+                if entries.next().is_none() {
+                    let _ = fs::remove_dir(&dir);
+                }
+            }
+        }
+    }
+
+    fn remove_output_for_path(&self, path: &Path) {
+        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+            if file_name.eq_ignore_ascii_case("_layout.html") {
+                return;
+            }
+        }
+
+        let rel_path = if let Ok(rel) = path.strip_prefix(&self.src_dir) {
+            rel.to_path_buf()
+        } else if let Some(name) = path.file_name() {
+            PathBuf::from(name)
+        } else {
+            return;
+        };
+
+        let dest = self.out_dir.join(&rel_path);
+        if !dest.exists() {
+            return;
+        }
+
+        let result = if dest.is_dir() {
+            fs::remove_dir_all(&dest)
+        } else {
+            fs::remove_file(&dest)
+        };
+
+        match result {
+            Ok(_) => println!("[Cleanup] Removed {}", rel_path.display()),
+            Err(e) => eprintln!("[Error] Failed to remove {}: {}", rel_path.display(), e),
+        }
+    }
+
+    fn expected_output_set(&self) -> HashSet<PathBuf> {
+        let mut expected = HashSet::new();
+
+        for entry in WalkDir::new(&self.src_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let rel = match path.strip_prefix(&self.src_dir) {
+                Ok(p) => p.to_path_buf(),
+                Err(_) => continue,
+            };
+
+            let is_html = rel
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("html"))
+                .unwrap_or(false);
+
+            if is_html {
+                if rel
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.eq_ignore_ascii_case("_layout.html"))
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+            }
+
+            expected.insert(rel);
+        }
+
+        expected
     }
 
     fn file_hash_equal(&self, a: &Path, b: &Path) -> bool {
