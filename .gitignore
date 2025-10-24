@@ -69,3 +69,9 @@ Thumbs.db
 # User output directories
 dist/
 publish/
+
+# Claude Code local configuration
+.claude/
+
+# Shell artifacts
+nul
