@@ -284,7 +284,7 @@ impl Compiler {
             child.serialize(&mut child_html).ok();
             result.extend(child_html);
         }
-        String::from_utf8_lossy(&result).to_string()
+        String::from_utf8_lossy(&result).trim().to_string()
     }
 
     fn merge_slot(&self, doc: &NodeRef, slot: &SlotSpec, content: &str) {
