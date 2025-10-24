@@ -1,0 +1,71 @@
+# Build results
+bin/
+obj/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio cache/options
+.vs/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Local History for Visual Studio Code
+.history/
+
+# IntelliJ/Rider
+.idea/
+.idea_modules/
+*.sln.iml
+*.swp
+*.swo
+*~
+
+# Generated files
+*.dll
+*.exe
+*.pdb
+
+# Test output
+TestResults/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+
+# Rider
+.idea/
+riderModule.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+*.ide
+*.ide-wal
+
+# User output directories
+dist/
+publish/
