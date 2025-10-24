@@ -19,7 +19,7 @@ echo "<html><body><header slot='header'></header><main slot='content'></main><fo
 echo "<section for-slot='content'><p>Hello world</p></section>" > index.html
 
 # 4. build it
-dotnet run -- src dist
+site-compiler src dist
 ```
 
 Output goes into `dist/`.
@@ -84,19 +84,20 @@ This makes it ideal for:
 | ✅ Pure HTML | No templating syntax, no front matter |
 | ✅ Strict enforcement | Missing → added, out-of-order → reordered |
 | ✅ Errors on extras | Keeps schema clean |
-| ✅ Normalized output | Writes back corrected source |
-| ✅ AOT-friendly | Compiles to single EXE via .NET 8 + PublishAot |
-| ✅ Smart asset copying | Copies CSS/JS/images only if changed |
-| ✅ Watch mode | `--watch` flag for continuous builds |
+| ✅ Proper DOM manipulation | Uses kuchiki for correct HTML parsing |
+| ✅ Single binary | Compiles to 1.5MB native executable (Rust) |
+| ✅ Smart asset copying | Copies CSS/JS/images only if changed (SHA256 hash) |
+| ✅ Watch mode | `--watch` flag for continuous builds with debouncing |
+| ⚡ Fast | 29ms build time for 2 pages |
 
 ## 🧰 Usage
 
 ```bash
 # build once
-SiteCompiler src dist
+site-compiler src dist
 
 # build and watch for changes
-SiteCompiler src dist --watch
+site-compiler src dist --watch
 ```
 
 ### Behavior
@@ -112,11 +113,11 @@ SiteCompiler src dist --watch
 ## 🏗️ Build & Publish
 
 ```bash
-dotnet restore
-dotnet publish -c Release -r win-x64 -p:PublishAot=true
+cd rust
+cargo build --release
 ```
 
-Produces a single executable in `bin/Release/net8.0/win-x64/publish/SiteCompiler.exe`.
+Produces a single 1.5MB executable in `rust/target/release/site-compiler.exe` (Windows) or `site-compiler` (Unix).
 
 ## 🧮 Comparison
 
