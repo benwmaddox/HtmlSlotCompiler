@@ -1,5 +1,8 @@
 # Rust
 /rust/target/
+/rust/target-size/
+/rust/**/target/
+target/
 Cargo.lock
 
 # Sample output
