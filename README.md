@@ -131,6 +131,15 @@ cargo build --release
 
 Produces a single 1.5MB executable in `rust/target/release/site-compiler.exe` (Windows) or `site-compiler` (Unix).
 
+## 🌙 Nightly Releases
+
+The repo includes a GitHub Actions nightly release workflow in `.github/workflows/nightly-release.yml`.
+
+- It runs on a nightly schedule and via manual dispatch.
+- It builds release archives for Windows, Linux, and macOS.
+- It only publishes when the current `master` HEAD differs from the previous `nightly` tag.
+- It updates the `nightly` prerelease in GitHub with fresh cross-platform artifacts.
+
 ## 🧮 Comparison
 
 | Feature                  | HtmlSlotCompiler          | Eleventy           | Astro           | Jekyll/Hugo    |
