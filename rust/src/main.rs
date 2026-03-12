@@ -48,6 +48,14 @@ struct Compiler {
     layout_path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+struct ExtractedPageSlot {
+    tag: String,
+    attributes: HashMap<String, String>,
+    original_html: Option<String>,
+    closing_style: SlotClosingStyle,
+}
+
 impl PageSlotContent {
     fn render(&self) -> String {
         if let Some(original) = &self.original_html {
@@ -138,6 +146,13 @@ fn strip_attribute(fragment: &str, attr: &str) -> String {
     } else {
         fragment.to_string()
     }
+}
+
+fn include_tag_regex() -> regex::Regex {
+    regex::Regex::new(
+        r#"(?is)<include\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*?(?:/\s*>|>\s*</include\s*>)"#,
+    )
+    .unwrap()
 }
 
 fn paths_equivalent(a: &Path, b: &Path) -> bool {
@@ -291,7 +306,7 @@ impl Compiler {
 
         let _ = fs::create_dir_all(&self.out_dir);
 
-        let layout_html = match fs::read_to_string(&self.layout_path) {
+        let layout_html = match self.expand_includes_in_file(&self.layout_path) {
             Ok(content) => content,
             Err(e) => {
                 eprintln!("[Error] {}", e);
@@ -350,20 +365,25 @@ impl Compiler {
             if let Ok(entries) = fs::read_dir(&self.src_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if !self.is_html_file(&path) {
+                    if !self.is_page_html(&path) {
                         continue;
                     }
                     let file_name = match path.file_name().and_then(|n| n.to_str()) {
                         Some(name) => name,
                         None => continue,
                     };
-                    if file_name.eq_ignore_ascii_case("_layout.html") {
-                        continue;
-                    }
                     if !self.out_dir.join(file_name).exists() {
                         full_rebuild = true;
                         break;
                     }
+                }
+            }
+        }
+
+        if !full_rebuild {
+            if let Some(paths) = changed_paths {
+                if paths.iter().any(|path| self.is_component_html(path)) {
+                    full_rebuild = true;
                 }
             }
         }
@@ -427,10 +447,25 @@ impl Compiler {
                 }
             };
 
+            let expanded_page_html = match self.expand_includes_in_html(
+                &page_html,
+                path.parent().unwrap_or(self.src_dir.as_path()),
+                &mut Vec::new(),
+            ) {
+                Ok(content) => content,
+                Err(e) => {
+                    eprintln!("[Error] {}: {}", file_name, e);
+                    overall_ok = false;
+                    continue;
+                }
+            };
+
             let page_doc = parse_html().one(page_html.clone());
+            let expanded_page_doc = parse_html().one(expanded_page_html);
 
             // Extract page slots with metadata for normalization
-            let mut page_slots: HashMap<String, PageSlotContent> = HashMap::new();
+            let mut raw_page_slots: HashMap<String, ExtractedPageSlot> = HashMap::new();
+            let mut expanded_inner_html_by_slot: HashMap<String, String> = HashMap::new();
             let mut page_slot_order: Vec<String> = Vec::new();
 
             for element in page_doc.select("[for-slot]").unwrap() {
@@ -438,50 +473,79 @@ impl Compiler {
                 let attrs_ref = node.as_element().unwrap().attributes.borrow();
 
                 if let Some(slot_name) = attrs_ref.get("for-slot") {
-                    if !page_slots.contains_key(slot_name) {
-                        let slot_name_string = slot_name.to_string();
-                        let tag_name = node.as_element().unwrap().name.local.to_string();
-
-                        let mut attributes = HashMap::new();
-                        for (attr_name, attr_value) in attrs_ref.map.iter() {
-                            attributes
-                                .insert(attr_name.local.to_string(), attr_value.value.clone());
-                        }
-
-                        let outer_html = self.get_outer_html(node);
-                        let inner_html = self.get_inner_html(node);
-
-                        page_slot_order.push(slot_name_string.clone());
-                        let trimmed_outer = outer_html.trim_end();
-                        let lower_outer = trimmed_outer.to_ascii_lowercase();
-                        let closing_probe = format!("</{}>", tag_name.to_ascii_lowercase());
-
-                        let closing_style = if trimmed_outer.ends_with("/>") {
-                            SlotClosingStyle::SelfClosing
-                        } else if lower_outer.contains(&closing_probe) {
-                            SlotClosingStyle::Explicit
-                        } else if is_void_element(&tag_name) {
-                            SlotClosingStyle::Void
-                        } else {
-                            SlotClosingStyle::Explicit
-                        };
-
-                        page_slots.insert(
-                            slot_name_string,
-                            PageSlotContent {
-                                tag: tag_name,
-                                inner_html,
-                                attributes,
-                                original_html: if outer_html.is_empty() {
-                                    None
-                                } else {
-                                    Some(outer_html)
-                                },
-                                closing_style,
-                            },
-                        );
+                    if raw_page_slots.contains_key(slot_name) {
+                        continue;
                     }
+
+                    let slot_name_string = slot_name.to_string();
+                    let tag_name = node.as_element().unwrap().name.local.to_string();
+
+                    let mut attributes = HashMap::new();
+                    for (attr_name, attr_value) in attrs_ref.map.iter() {
+                        attributes.insert(attr_name.local.to_string(), attr_value.value.clone());
+                    }
+
+                    let outer_html = self.get_outer_html(node);
+                    let trimmed_outer = outer_html.trim_end();
+                    let lower_outer = trimmed_outer.to_ascii_lowercase();
+                    let closing_probe = format!("</{}>", tag_name.to_ascii_lowercase());
+
+                    let closing_style = if trimmed_outer.ends_with("/>") {
+                        SlotClosingStyle::SelfClosing
+                    } else if lower_outer.contains(&closing_probe) {
+                        SlotClosingStyle::Explicit
+                    } else if is_void_element(&tag_name) {
+                        SlotClosingStyle::Void
+                    } else {
+                        SlotClosingStyle::Explicit
+                    };
+
+                    page_slot_order.push(slot_name_string.clone());
+                    raw_page_slots.insert(
+                        slot_name_string,
+                        ExtractedPageSlot {
+                            tag: tag_name,
+                            attributes,
+                            original_html: if outer_html.is_empty() {
+                                None
+                            } else {
+                                Some(outer_html)
+                            },
+                            closing_style,
+                        },
+                    );
                 }
+            }
+
+            for element in expanded_page_doc.select("[for-slot]").unwrap() {
+                let node = element.as_node();
+                let attrs_ref = node.as_element().unwrap().attributes.borrow();
+
+                if let Some(slot_name) = attrs_ref.get("for-slot") {
+                    if expanded_inner_html_by_slot.contains_key(slot_name) {
+                        continue;
+                    }
+
+                    expanded_inner_html_by_slot
+                        .insert(slot_name.to_string(), self.get_inner_html(node));
+                }
+            }
+
+            let mut page_slots: HashMap<String, PageSlotContent> = HashMap::new();
+            for (slot_name, raw_slot) in &raw_page_slots {
+                page_slots.insert(
+                    slot_name.clone(),
+                    PageSlotContent {
+                        tag: raw_slot.tag.clone(),
+                        inner_html: expanded_inner_html_by_slot
+                            .get(slot_name)
+                            .cloned()
+                            .unwrap_or_default(),
+                        attributes: raw_slot.attributes.clone(),
+                        original_html: raw_slot.original_html.clone(),
+                        closing_style: raw_slot.closing_style,
+                    },
+                );
             }
 
             // Check for unknown slots
@@ -552,7 +616,8 @@ impl Compiler {
                 .trim_end_matches('\n')
                 .to_string();
 
-            if normalized_compare != original_compare {
+            if (order_changed || !missing_slots.is_empty()) && normalized_compare != original_compare
+            {
                 let mut final_text = normalized_compare.clone();
                 if had_trailing_newline {
                     final_text.push('\n');
@@ -674,7 +739,7 @@ impl Compiler {
             return None;
         }
 
-        if !self.is_html_file(&candidate) {
+        if !self.is_page_html(&candidate) {
             return None;
         }
 
@@ -686,6 +751,33 @@ impl Compiler {
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.eq_ignore_ascii_case("html"))
             .unwrap_or(false)
+    }
+
+    fn is_page_html(&self, path: &Path) -> bool {
+        if !self.is_html_file(path) {
+            return false;
+        }
+
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.eq_ignore_ascii_case("_layout.html"))
+            .unwrap_or(false)
+        {
+            return false;
+        }
+
+        self.html_has_slot_providers(path)
+    }
+
+    fn is_component_html(&self, path: &Path) -> bool {
+        self.is_html_file(path)
+            && !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.eq_ignore_ascii_case("_layout.html"))
+                .unwrap_or(false)
+            && !self.html_has_slot_providers(path)
     }
 
     fn path_missing_with_retry(&self, path: &Path) -> bool {
@@ -716,6 +808,81 @@ impl Compiler {
         let mut result = Vec::new();
         node.serialize(&mut result).ok();
         String::from_utf8_lossy(&result).to_string()
+    }
+
+    fn html_has_slot_providers(&self, path: &Path) -> bool {
+        let html = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(_) => return false,
+        };
+
+        let doc = parse_html().one(html);
+        doc.select("[for-slot]")
+            .ok()
+            .and_then(|mut nodes| nodes.next())
+            .is_some()
+    }
+
+    fn expand_includes_in_file(&self, path: &Path) -> Result<String, String> {
+        self.expand_includes_from_file(path, &mut Vec::new())
+    }
+
+    fn expand_includes_from_file(
+        &self,
+        path: &Path,
+        stack: &mut Vec<PathBuf>,
+    ) -> Result<String, String> {
+        let canonical = path.canonicalize().map_err(|e| {
+            format!("Failed to read include {}: {}", path.display(), e)
+        })?;
+
+        if let Some(index) = stack.iter().position(|entry| *entry == canonical) {
+            let mut chain = stack[index..]
+                .iter()
+                .map(|entry| entry.display().to_string())
+                .collect::<Vec<_>>();
+            chain.push(canonical.display().to_string());
+            return Err(format!("Include cycle detected: {}", chain.join(" -> ")));
+        }
+
+        let html = fs::read_to_string(&canonical).map_err(|e| {
+            format!("Failed to read include {}: {}", canonical.display(), e)
+        })?;
+
+        stack.push(canonical.clone());
+        let expanded = self.expand_includes_in_html(
+            &html,
+            canonical.parent().unwrap_or(self.src_dir.as_path()),
+            stack,
+        );
+        stack.pop();
+        expanded
+    }
+
+    fn expand_includes_in_html(
+        &self,
+        html: &str,
+        current_dir: &Path,
+        stack: &mut Vec<PathBuf>,
+    ) -> Result<String, String> {
+        let include_re = include_tag_regex();
+        let mut result = String::with_capacity(html.len());
+        let mut last_end = 0;
+
+        for captures in include_re.captures_iter(html) {
+            let matched = captures.get(0).unwrap();
+            let src = captures.get(1).unwrap().as_str();
+            result.push_str(&html[last_end..matched.start()]);
+
+            let include_path = current_dir.join(src);
+            let expanded = self.expand_includes_from_file(&include_path, stack)?;
+            result.push_str(&expanded);
+
+            last_end = matched.end();
+        }
+
+        result.push_str(&html[last_end..]);
+        Ok(result)
     }
 
     fn default_slot_provider(&self, slot: &SlotSpec) -> PageSlotContent {
@@ -960,21 +1127,8 @@ impl Compiler {
                 Err(_) => continue,
             };
 
-            let is_html = rel
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("html"))
-                .unwrap_or(false);
-
-            if is_html {
-                if rel
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(|name| name.eq_ignore_ascii_case("_layout.html"))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
+            if self.is_html_file(path) && !self.is_page_html(path) {
+                continue;
             }
 
             expected.insert(rel);
@@ -1001,5 +1155,98 @@ impl Compiler {
             }
         }
         hasher.finalize().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("html-slot-compiler-{name}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn make_compiler(root: &Path) -> Compiler {
+        let src_dir = root.join("src");
+        let out_dir = root.join("dist");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        Compiler {
+            src_dir: src_dir.clone(),
+            out_dir,
+            layout_path: src_dir.join("_layout.html"),
+        }
+    }
+
+    #[test]
+    fn expands_recursive_includes_and_skips_component_output() {
+        let root = make_temp_dir("recursive-include");
+        let compiler = make_compiler(&root);
+
+        fs::create_dir_all(compiler.src_dir.join("components")).unwrap();
+        fs::write(
+            &compiler.layout_path,
+            r#"
+<!DOCTYPE html>
+<html>
+  <body>
+    <main slot="content"></main>
+  </body>
+</html>
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            compiler.src_dir.join("components/card.html"),
+            r#"<article class="card"><include src="badge.html" /></article>"#,
+        )
+        .unwrap();
+        fs::write(
+            compiler.src_dir.join("components/badge.html"),
+            r#"<span class="badge">Included</span>"#,
+        )
+        .unwrap();
+        fs::write(
+            compiler.src_dir.join("index.html"),
+            r#"<main for-slot="content"><include src="components/card.html" /></main>"#,
+        )
+        .unwrap();
+
+        assert!(compiler.build_once(None));
+
+        let built = fs::read_to_string(compiler.out_dir.join("index.html")).unwrap();
+        assert!(built.contains(r#"<article class="card"><span class="badge">Included</span></article>"#));
+        assert!(!compiler.out_dir.join("components/card.html").exists());
+        assert!(!compiler.out_dir.join("components/badge.html").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reports_include_cycles() {
+        let root = make_temp_dir("include-cycle");
+        let compiler = make_compiler(&root);
+
+        fs::create_dir_all(compiler.src_dir.join("components")).unwrap();
+        let a_path = compiler.src_dir.join("components/a.html");
+        let b_path = compiler.src_dir.join("components/b.html");
+
+        fs::write(&a_path, r#"<include src="b.html" />"#).unwrap();
+        fs::write(&b_path, r#"<include src="a.html" />"#).unwrap();
+
+        let error = compiler.expand_includes_in_file(&a_path).unwrap_err();
+        assert!(error.contains("Include cycle detected"));
+        assert!(error.contains("a.html"));
+        assert!(error.contains("b.html"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

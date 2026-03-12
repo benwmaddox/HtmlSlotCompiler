@@ -1,0 +1,183 @@
+name: Nightly Release
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+env:
+  BINARY_NAME: site-compiler
+  RELEASE_TAG: nightly
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      previous_sha: ${{ steps.check.outputs.previous_sha }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Check current nightly tag
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const currentSha = context.sha;
+            const tag = process.env.RELEASE_TAG;
+            let previousSha = 'none';
+            let shouldBuild = true;
+            let reason = `No ${tag} tag exists yet.`;
+
+            try {
+              const ref = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tag}`,
+              });
+
+              previousSha = ref.data.object.sha;
+
+              if (previousSha === currentSha) {
+                shouldBuild = false;
+                reason = `${tag} already points to ${currentSha}.`;
+              } else {
+                reason = `${tag} points to ${previousSha}; building ${currentSha}.`;
+              }
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            core.setOutput('should_build', shouldBuild ? 'true' : 'false');
+            core.setOutput('previous_sha', previousSha);
+            await core.summary
+              .addHeading('Nightly release check')
+              .addRaw(reason)
+              .write();
+
+      - name: Compute short SHA
+        id: meta
+        shell: bash
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_suffix: linux-x64
+          - os: windows-latest
+            artifact_suffix: windows-x64
+          - os: macos-13
+            artifact_suffix: macos-x64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path rust/Cargo.toml
+
+      - name: Package release archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          binary_name="${BINARY_NAME}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            binary_name="${binary_name}.exe"
+          fi
+
+          staging_dir="package"
+          mkdir -p "$staging_dir"
+          cp "rust/target/release/$binary_name" "$staging_dir/$binary_name"
+          cp README.md "$staging_dir/README.md"
+          cp LICENSE.txt "$staging_dir/LICENSE.txt"
+
+          asset_name="HtmlSlotCompiler-${{ matrix.artifact_suffix }}.zip"
+          ASSET_NAME="$asset_name" STAGING_DIR="$staging_dir" python - <<'PY'
+          import os
+          import zipfile
+
+          asset_name = os.environ["ASSET_NAME"]
+          staging_dir = os.environ["STAGING_DIR"]
+
+          with zipfile.ZipFile(asset_name, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+              for file_name in os.listdir(staging_dir):
+                  full_path = os.path.join(staging_dir, file_name)
+                  archive.write(full_path, arcname=file_name)
+          PY
+
+          echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_suffix }}
+          path: ${{ steps.package.outputs.asset_name }}
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - check
+      - build
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Move nightly tag to current commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$RELEASE_TAG" --force
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Flatten artifact directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+          find release-assets -type f -exec cp {} release-upload/ \;
+          ls -la release-upload
+
+      - name: Publish nightly prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Nightly
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          body: |
+            Automated nightly release for `${{ github.sha }}`.
+
+            Previous nightly commit: `${{ needs.check.outputs.previous_sha }}`
+          files: release-upload/*

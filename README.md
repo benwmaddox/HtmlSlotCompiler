@@ -3,7 +3,7 @@
 A layout-driven static HTML compiler that enforces structure instead of templating.
 It merges pages with a shared `_layout.html`, auto-normalizes page order, and ensures all pages conform to the same schema.
 
-**No templating. No includes. Just HTML.**
+**No templating. Just HTML with slot-based pages and static includes.**
 
 ## 🚀 Quick Start
 
@@ -60,6 +60,18 @@ When compiled:
 - extra slots are errors,
 - missing ones are auto-added,
 - normalized source is written back if changed.
+
+## Components
+
+Static HTML fragments can be reused with:
+
+```html
+<include src="components/hero.html" />
+```
+
+Include paths are resolved relative to the file that contains the include tag, and nested includes are expanded recursively.
+
+Component files are treated as fragments, not pages, so they are not emitted into `dist/` unless they are referenced by a normal asset pipeline outside the compiler.
 
 ## 🧠 Philosophy
 
@@ -118,6 +130,15 @@ cargo build --release
 ```
 
 Produces a single 1.5MB executable in `rust/target/release/site-compiler.exe` (Windows) or `site-compiler` (Unix).
+
+## 🌙 Nightly Releases
+
+The repo includes a GitHub Actions nightly release workflow in `.github/workflows/nightly-release.yml`.
+
+- It runs on a nightly schedule and via manual dispatch.
+- It builds release archives for Windows, Linux, and macOS.
+- It only publishes when the current `master` HEAD differs from the previous `nightly` tag.
+- It updates the `nightly` prerelease in GitHub with fresh cross-platform artifacts.
 
 ## 🧮 Comparison
 
