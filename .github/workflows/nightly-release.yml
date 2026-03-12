@@ -80,7 +80,7 @@ jobs:
             artifact_suffix: linux-x64
           - os: windows-latest
             artifact_suffix: windows-x64
-          - os: macos-13
+          - os: macos-15-intel
             artifact_suffix: macos-x64
     steps:
       - name: Checkout
