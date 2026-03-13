@@ -148,6 +148,30 @@ fn strip_attribute(fragment: &str, attr: &str) -> String {
     }
 }
 
+fn set_attribute_on_tag(tag_fragment: &str, attr: &str, value: &str) -> String {
+    let without_attr = strip_attribute(tag_fragment, attr);
+    let trimmed = without_attr.trim_end();
+
+    let (base, closing) = if let Some(base) = trimmed.strip_suffix("/>") {
+        (base.trim_end(), " />")
+    } else if let Some(base) = trimmed.strip_suffix('>') {
+        (base.trim_end(), ">")
+    } else {
+        (trimmed, "")
+    };
+
+    let mut result = base.to_string();
+    if !result.ends_with(' ') {
+        result.push(' ');
+    }
+    result.push_str(attr);
+    result.push_str("=\"");
+    result.push_str(&value.replace('"', "&quot;"));
+    result.push('"');
+    result.push_str(closing);
+    result
+}
+
 fn include_tag_regex() -> regex::Regex {
     regex::Regex::new(
         r#"(?is)<include\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*?(?:/\s*>|>\s*</include\s*>)"#,
@@ -921,27 +945,18 @@ impl Compiler {
                     let ending = &caps[2];
                     let without_slot = strip_attribute(&caps[1], "slot");
                     let without_mode = strip_attribute(&without_slot, "slot-mode");
-                    let opening_tag = without_mode.trim_end().to_string();
+                    let opening_tag = format!("{}{}", without_mode.trim_end(), ending);
 
                     match slot.mode.as_str() {
                         mode if mode.starts_with("attr:") => {
                             let attr_name = &mode[5..];
                             if let Some(value) = content.attributes.get(attr_name) {
-                                let mut builder = opening_tag;
-                                if !builder.ends_with(' ') {
-                                    builder.push(' ');
-                                }
-                                builder.push_str(attr_name);
-                                builder.push_str("=\"");
-                                builder.push_str(value);
-                                builder.push('"');
-
-                                format!("{}{}", builder, ending)
+                                set_attribute_on_tag(&opening_tag, attr_name, value)
                             } else {
-                                format!("{}{}", opening_tag, ending)
+                                opening_tag
                             }
                         }
-                        _ => format!("{}{}", opening_tag, ending),
+                        _ => opening_tag,
                     }
                 })
                 .to_string();
@@ -973,8 +988,7 @@ impl Compiler {
                     let attr_name = &mode[5..];
 
                     if let Some(value) = content.attributes.get(attr_name) {
-                        let tag_with_attr =
-                            opening_tag.replace(">", &format!(r#" {}="{}">"#, attr_name, value));
+                        let tag_with_attr = set_attribute_on_tag(&opening_tag, attr_name, value);
                         format!("{}{}", tag_with_attr, closing_tag)
                     } else {
                         format!("{}{}", opening_tag, closing_tag)
@@ -1246,6 +1260,46 @@ mod tests {
         assert!(error.contains("Include cycle detected"));
         assert!(error.contains("a.html"));
         assert!(error.contains("b.html"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn attr_slot_mode_updates_meta_content_without_mangling_tag() {
+        let root = make_temp_dir("attr-slot-meta");
+        let compiler = make_compiler(&root);
+
+        fs::write(
+            &compiler.layout_path,
+            r#"
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta slot="description" slot-mode="attr:content" content="" />
+  </head>
+  <body>
+    <main slot="content"></main>
+  </body>
+</html>
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            compiler.src_dir.join("index.html"),
+            r#"
+<meta for-slot="description" content="Synthetic benchmark page 001" />
+<main for-slot="content"><p>Hello</p></main>
+"#,
+        )
+        .unwrap();
+
+        assert!(compiler.build_once(None));
+
+        let built = fs::read_to_string(compiler.out_dir.join("index.html")).unwrap();
+        assert!(built.contains(r#"<meta content="Synthetic benchmark page 001" />"#));
+        assert!(!built.contains(r#"/ content=""#));
+        assert_eq!(built.matches("content=").count(), 1);
 
         let _ = fs::remove_dir_all(root);
     }
