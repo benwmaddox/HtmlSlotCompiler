@@ -7,6 +7,8 @@ Cargo.lock
 
 # Sample output
 /sample/dist/
+/benchmarks/generated/
+/benchmarks/results/
 
 # IDE
 .vscode/
