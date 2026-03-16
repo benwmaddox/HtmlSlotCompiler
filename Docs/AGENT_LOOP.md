@@ -13,7 +13,7 @@ Run autonomously without requiring plan review. Own validation and leave the rep
 
 ## Choose work
 
-1. Read `Docs/BUGS.md`; choose the highest-severity item in `READY`.
+1. Read `Docs/BUGS.md`; choose the highest-severity item in `READY`, including any PR review feedback synced there by the inbox.
 2. If no bug is ready, choose the oldest non-draft spec in `Specs/`.
 3. If no implementation task is available, improve docs, validation, or task hygiene.
 

@@ -32,7 +32,7 @@ This repository uses a Night Shift style workflow for autonomous work on the Rus
 
 ## Task selection
 
-- Pick the highest-severity `READY` bug from `Docs/BUGS.md` first.
+- Pick the highest-severity `READY` bug from `Docs/BUGS.md`, including any PR review feedback synced there by the inbox.
 - If no `READY` bug exists, pick the oldest non-draft spec in `Specs/`.
 - If neither exists, improve docs, tests, or validation and record that work.
 
