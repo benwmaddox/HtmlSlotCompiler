@@ -28,7 +28,7 @@ This repository uses a Night Shift style workflow for autonomous work on the Rus
 - The production crate lives under `rust/`.
 - Validation must target `rust/Cargo.toml`, not the repo root.
 - Use `sample/src/` for smoke-test verification of real compiler behavior.
-- Do not modify or replace `dist/HtmlSlotCompiler.exe` unless the task explicitly requires a release artifact refresh.
+- Treat `dist/` as documentation and release-output staging, not a source-controlled binary drop.
 
 ## Task selection
 

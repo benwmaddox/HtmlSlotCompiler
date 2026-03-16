@@ -1,10 +1,10 @@
 # HtmlSlotCompiler Distribution
 
-`HtmlSlotCompiler.exe` is the standalone build of the HtmlSlotCompiler CLI, packaged for embedding in other repositories.
+Release binaries for HtmlSlotCompiler are published through GitHub releases and nightly artifacts.
 
 ## Quick Use
 - Ensure your source folder contains `_layout.html` plus any number of pages that provide `for-slot` fragments.
-- Run `HtmlSlotCompiler.exe <source_dir> <output_dir>` to normalize HTML and emit the compiled site.
+- Download the appropriate release for your platform, then run `site-compiler <source_dir> <output_dir>` to normalize HTML and emit the compiled site.
 - Add `--watch` to rebuild automatically while editing.
 
 ## Slot Modes

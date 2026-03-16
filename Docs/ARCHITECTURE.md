@@ -5,7 +5,7 @@
 - `rust/` contains the `site-compiler` Rust crate and unit tests.
 - `sample/src/` contains a smoke-testable sample site with layout, pages, includes, and assets.
 - `.github/workflows/nightly-release.yml` publishes nightly release archives from `master`.
-- `dist/HtmlSlotCompiler.exe` is a checked-in binary artifact and should be treated as release output, not normal source.
+- `dist/` is reserved for lightweight distribution docs; release binaries should come from CI artifacts and GitHub releases, not from tracked executables in the repository.
 
 ## Validation strategy
 
