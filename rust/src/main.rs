@@ -640,7 +640,8 @@ impl Compiler {
                 .trim_end_matches('\n')
                 .to_string();
 
-            if (order_changed || !missing_slots.is_empty()) && normalized_compare != original_compare
+            if (order_changed || !missing_slots.is_empty())
+                && normalized_compare != original_compare
             {
                 let mut final_text = normalized_compare.clone();
                 if had_trailing_newline {
@@ -856,9 +857,9 @@ impl Compiler {
         path: &Path,
         stack: &mut Vec<PathBuf>,
     ) -> Result<String, String> {
-        let canonical = path.canonicalize().map_err(|e| {
-            format!("Failed to read include {}: {}", path.display(), e)
-        })?;
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| format!("Failed to read include {}: {}", path.display(), e))?;
 
         if let Some(index) = stack.iter().position(|entry| *entry == canonical) {
             let mut chain = stack[index..]
@@ -869,9 +870,8 @@ impl Compiler {
             return Err(format!("Include cycle detected: {}", chain.join(" -> ")));
         }
 
-        let html = fs::read_to_string(&canonical).map_err(|e| {
-            format!("Failed to read include {}: {}", canonical.display(), e)
-        })?;
+        let html = fs::read_to_string(&canonical)
+            .map_err(|e| format!("Failed to read include {}: {}", canonical.display(), e))?;
 
         stack.push(canonical.clone());
         let expanded = self.expand_includes_in_html(
@@ -1237,7 +1237,8 @@ mod tests {
         assert!(compiler.build_once(None));
 
         let built = fs::read_to_string(compiler.out_dir.join("index.html")).unwrap();
-        assert!(built.contains(r#"<article class="card"><span class="badge">Included</span></article>"#));
+        assert!(built
+            .contains(r#"<article class="card"><span class="badge">Included</span></article>"#));
         assert!(!compiler.out_dir.join("components/card.html").exists());
         assert!(!compiler.out_dir.join("components/badge.html").exists());
 

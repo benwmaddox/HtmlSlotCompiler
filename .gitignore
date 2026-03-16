@@ -9,6 +9,7 @@ Cargo.lock
 /sample/dist/
 /benchmarks/generated/
 /benchmarks/results/
+/dist/*.exe
 
 # IDE
 .vscode/
@@ -22,3 +23,6 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Night Shift logs
+Logs/nightshift/*.log

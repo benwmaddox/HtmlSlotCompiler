@@ -189,3 +189,29 @@ Built by Ben Maddox.
 ```
 rust/target/release/site-compiler.exe sample/src sample/dist --watch
 ```
+
+## Development
+
+If `cargo` is not already on your `PATH`, source your local Rust environment first:
+
+```bash
+source "$HOME/.cargo/env"
+```
+
+Standard local validation:
+
+```bash
+./Scripts/validate.sh
+```
+
+That runs Rust formatting, `cargo check`, `cargo test`, and a smoke test that compiles `sample/src/` into a temporary output directory and verifies the generated files.
+
+## Night Shift Workflow
+
+This repository now includes a Night Shift style agent workflow. The canonical router is [AGENTS.md](AGENTS.md), with detailed operating docs in `Docs/`.
+
+The intended loop is:
+
+1. keep `Docs/BUGS.md`, `Docs/TODOS.md`, and `Specs/` current
+2. run `./Scripts/nightshift.sh codex` or `./Scripts/nightshift.sh claude`
+3. review the morning report and commit history before merging
