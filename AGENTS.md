@@ -40,3 +40,4 @@ This repository uses a Night Shift style workflow for autonomous work on the Rus
 
 - Do not ask the human to review plans during the run.
 - Leave evidence in tests, docs updates, commit messages, and `Docs/NIGHT_SHIFT_REPORT.md`.
+- If the task came from synced PR review feedback, reply on GitHub when appropriate after making the change or when clarification is needed.

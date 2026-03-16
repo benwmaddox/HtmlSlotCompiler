@@ -20,6 +20,7 @@ Run autonomously without requiring plan review. Own validation and leave the rep
 ## Understand the task
 
 - Read the chosen spec or bug entry.
+- If the bug came from synced PR review feedback, use the included GitHub links and thread context to understand exactly what needs a reply.
 - Load only the docs needed for that task.
 - Read the relevant Rust code before proposing changes.
 
@@ -48,8 +49,9 @@ Run autonomously without requiring plan review. Own validation and leave the rep
 
 1. Add or update a changelog entry following `Docs/CHANGELOG_RULES.md`.
 2. Update any docs that would prevent repeating the same mistake.
-3. Commit with a message that explains what changed, why, how it was verified, and any residual risks.
-4. Append a concise entry to `Docs/NIGHT_SHIFT_REPORT.md`.
+3. If the task came from PR review feedback, reply on GitHub when appropriate with the fix, clarification, or follow-up question.
+4. Commit with a message that explains what changed, why, how it was verified, and any residual risks.
+5. Append a concise entry to `Docs/NIGHT_SHIFT_REPORT.md`.
 
 ## Stop conditions
 
