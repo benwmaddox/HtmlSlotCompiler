@@ -7,6 +7,8 @@ LOG_DIR="$ROOT/Logs/nightshift"
 TS="$(date +"%Y-%m-%d_%H%M%S")"
 LOG_FILE="$LOG_DIR/run_$TS.log"
 BRANCH="nightshift/$TS"
+BRANCH_MODE="${NIGHTSHIFT_BRANCH_MODE:-fresh}"
+EXPECTED_BRANCH="${NIGHTSHIFT_EXPECT_BRANCH:-}"
 
 mkdir -p "$LOG_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -28,10 +30,19 @@ fi
 echo "== Git status =="
 git status --short || true
 
-if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-  git switch "$BRANCH"
+if [[ "$BRANCH_MODE" == "preserve" ]]; then
+  CURRENT_BRANCH="$(git branch --show-current)"
+  if [[ -n "$EXPECTED_BRANCH" && "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]]; then
+    echo "ERROR: expected to run on branch '$EXPECTED_BRANCH' but current branch is '$CURRENT_BRANCH'."
+    exit 4
+  fi
+  echo "== Branch mode: preserve current branch ${CURRENT_BRANCH:-DETACHED} =="
 else
-  git switch -c "$BRANCH"
+  if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+    git switch "$BRANCH"
+  else
+    git switch -c "$BRANCH"
+  fi
 fi
 
 echo "== Baseline validation =="
@@ -43,7 +54,7 @@ case "$MODE" in
     claude -p "@Docs/AGENT_LOOP.md Follow the Night Shift loop now." --output-format text --dangerously-skip-permissions
     ;;
   codex)
-    codex exec "Read Docs/AGENT_LOOP.md and execute the Night Shift loop."
+    codex exec --dangerously-bypass-approvals-and-sandbox "Read Docs/AGENT_LOOP.md and execute the Night Shift loop."
     ;;
   *)
     echo "ERROR: unknown mode: $MODE"
