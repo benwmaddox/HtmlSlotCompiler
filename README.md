@@ -23,7 +23,7 @@ site-compiler src dist
 ```
 
 Output goes into `dist/`.
-Your source files (`src/*.html`) will be normalized automatically to match `_layout.html`.
+Your source files (`src/**/*.html`) will be normalized automatically to match the nearest `_layout.html` found by walking up from each page.
 
 ## 🧩 Concept
 
@@ -60,6 +60,8 @@ When compiled:
 - extra slots are errors,
 - missing ones are auto-added,
 - normalized source is written back if changed.
+
+Pages can live in nested folders. Each page uses the closest `_layout.html` in its own folder or an ancestor folder under the source root.
 
 ## Components
 
@@ -159,6 +161,10 @@ src/
   _layout.html
   index.html
   about.html
+  blog/
+    _layout.html
+    posts/
+      launch.html
   css/
     site.css
   img/

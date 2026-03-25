@@ -29,6 +29,13 @@ struct SlotSpec {
 }
 
 #[derive(Debug, Clone)]
+struct LayoutData {
+    html: String,
+    slots: Vec<SlotSpec>,
+    layout_names: HashSet<String>,
+}
+
+#[derive(Debug, Clone)]
 struct PageSlotContent {
     tag: String,
     inner_html: String,
@@ -45,7 +52,6 @@ const VOID_TAGS: [&str; 14] = [
 struct Compiler {
     src_dir: PathBuf,
     out_dir: PathBuf,
-    layout_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -179,17 +185,6 @@ fn include_tag_regex() -> regex::Regex {
     .unwrap()
 }
 
-fn paths_equivalent(a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
-
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a_canon), Ok(b_canon)) => a_canon == b_canon,
-        _ => false,
-    }
-}
-
 fn write_if_changed(path: &Path, contents: &str) -> std::io::Result<bool> {
     if let Ok(existing) = fs::read_to_string(path) {
         if existing == contents {
@@ -228,22 +223,13 @@ fn main() {
         std::process::exit(1);
     }
 
-    let raw_layout_path = src_dir_path.join("_layout.html");
-    if !raw_layout_path.exists() {
-        eprintln!("[Error] Missing {}", raw_layout_path.display());
-        std::process::exit(1);
-    }
-
     let src_dir = src_dir_path
         .canonicalize()
         .unwrap_or_else(|_| src_dir_path.to_path_buf());
     let out_dir = Path::new(out_dir_arg).to_path_buf();
-    let layout_path = src_dir.join("_layout.html");
-
     let compiler = Compiler {
         src_dir: src_dir.clone(),
         out_dir: out_dir.clone(),
-        layout_path,
     };
     compiler.clean_output_dir();
 
@@ -259,8 +245,6 @@ fn main() {
 
     let src_dir_clone = compiler.src_dir.clone();
     let out_dir_clone = compiler.out_dir.clone();
-    let layout_path_clone = compiler.layout_path.clone();
-
     let pending = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
     let pending_clone = Arc::clone(&pending);
 
@@ -312,7 +296,6 @@ fn main() {
                     let compiler = Compiler {
                         src_dir: src_dir_clone.clone(),
                         out_dir: out_dir_clone.clone(),
-                        layout_path: layout_path_clone.clone(),
                     };
                     compiler.build_once(Some(&changed_paths));
                     timer_active = false;
@@ -330,47 +313,11 @@ impl Compiler {
 
         let _ = fs::create_dir_all(&self.out_dir);
 
-        let layout_html = match self.expand_includes_in_file(&self.layout_path) {
-            Ok(content) => content,
-            Err(e) => {
-                eprintln!("[Error] {}", e);
-                return false;
-            }
-        };
-
-        // Parse layout and extract slots
-        let layout_doc = parse_html().one(layout_html.clone());
-
-        let mut slots = Vec::new();
-        for element in layout_doc.select("[slot]").unwrap() {
-            let node = element.as_node();
-            let attrs = node.as_element().unwrap().attributes.borrow();
-
-            let name = attrs.get("slot").unwrap_or("").to_string();
-            let mode = attrs.get("slot-mode").unwrap_or("html").to_string();
-            let layout_tag = node.as_element().unwrap().name.local.to_string();
-            let closing_style = determine_closing_style(&layout_html, &layout_tag, &name);
-
-            slots.push(SlotSpec {
-                name,
-                mode,
-                layout_tag,
-                closing_style,
-            });
-        }
-
-        if slots.is_empty() {
-            println!("[Warn] No slots in _layout.html. Nothing to merge.");
-        }
-
         let mut overall_ok = true;
-        let layout_names: HashSet<String> = slots.iter().map(|s| s.name.clone()).collect();
-
         let src_dir_canonical = self
             .src_dir
             .canonicalize()
             .unwrap_or_else(|_| self.src_dir.clone());
-        let layout_aliases = self.build_layout_aliases();
 
         let mut full_rebuild = changed_paths.is_none();
         if let Some(paths) = changed_paths {
@@ -378,28 +325,20 @@ impl Compiler {
                 full_rebuild = true;
             } else if paths.iter().any(|path| self.path_missing_with_retry(path)) {
                 full_rebuild = true;
-            } else if paths.iter().any(|path| {
-                self.path_matches_layout(path, &layout_aliases, src_dir_canonical.as_path())
-            }) {
+            } else if paths.iter().any(|path| self.is_layout_file(path)) {
                 full_rebuild = true;
             }
         }
 
         if !full_rebuild {
-            if let Ok(entries) = fs::read_dir(&self.src_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if !self.is_page_html(&path) {
-                        continue;
-                    }
-                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                        Some(name) => name,
-                        None => continue,
-                    };
-                    if !self.out_dir.join(file_name).exists() {
-                        full_rebuild = true;
-                        break;
-                    }
+            for path in self.collect_page_paths() {
+                let rel_path = match path.strip_prefix(&self.src_dir) {
+                    Ok(rel) => rel,
+                    Err(_) => continue,
+                };
+                if !self.out_dir.join(rel_path).exists() {
+                    full_rebuild = true;
+                    break;
                 }
             }
         }
@@ -423,27 +362,12 @@ impl Compiler {
         let mut page_paths: Vec<PathBuf> = Vec::new();
 
         if full_rebuild {
-            let entries = match fs::read_dir(&self.src_dir) {
-                Ok(entries) => entries,
-                Err(e) => {
-                    eprintln!("[Error] {}", e);
-                    return false;
-                }
-            };
-
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(page_path) =
-                    self.normalize_watch_path(&path, src_dir_canonical.as_path(), &layout_aliases)
-                {
-                    page_paths.push(page_path);
-                }
-            }
+            page_paths = self.collect_page_paths();
         } else if let Some(paths) = changed_paths {
             let mut seen = HashSet::new();
             for path in paths {
                 if let Some(page_path) =
-                    self.normalize_watch_path(path, src_dir_canonical.as_path(), &layout_aliases)
+                    self.normalize_watch_path(path, src_dir_canonical.as_path())
                 {
                     if seen.insert(page_path.clone()) {
                         page_paths.push(page_path);
@@ -452,11 +376,13 @@ impl Compiler {
             }
         }
 
+        let mut layout_cache = HashMap::new();
         for path in page_paths {
-            let file_name = match path.file_name().and_then(|name| name.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
+            let rel_path = match path.strip_prefix(&self.src_dir) {
+                Ok(rel) => rel.to_path_buf(),
+                Err(_) => continue,
             };
+            let display_path = rel_path.display().to_string();
 
             if !path.exists() {
                 continue;
@@ -471,6 +397,15 @@ impl Compiler {
                 }
             };
 
+            let layout = match self.layout_for_page(&path, &mut layout_cache) {
+                Ok(layout) => layout,
+                Err(e) => {
+                    eprintln!("[Error] {}: {}", display_path, e);
+                    overall_ok = false;
+                    continue;
+                }
+            };
+
             let expanded_page_html = match self.expand_includes_in_html(
                 &page_html,
                 path.parent().unwrap_or(self.src_dir.as_path()),
@@ -478,7 +413,7 @@ impl Compiler {
             ) {
                 Ok(content) => content,
                 Err(e) => {
-                    eprintln!("[Error] {}: {}", file_name, e);
+                    eprintln!("[Error] {}: {}", display_path, e);
                     overall_ok = false;
                     continue;
                 }
@@ -575,7 +510,7 @@ impl Compiler {
             // Check for unknown slots
             let mut extra = Vec::new();
             for slot_name in page_slots.keys() {
-                if !layout_names.contains(slot_name) {
+                if !layout.layout_names.contains(slot_name) {
                     extra.push(slot_name.clone());
                 }
             }
@@ -583,14 +518,15 @@ impl Compiler {
             if !extra.is_empty() {
                 println!(
                     "[Error] {} has unknown slots: {}",
-                    file_name,
+                    display_path,
                     extra.join(", ")
                 );
                 overall_ok = false;
                 continue;
             }
 
-            let expected_order: Vec<String> = slots
+            let expected_order: Vec<String> = layout
+                .slots
                 .iter()
                 .filter(|slot| page_slots.contains_key(&slot.name))
                 .map(|slot| slot.name.clone())
@@ -599,7 +535,7 @@ impl Compiler {
 
             let mut page_slots_for_merge = page_slots.clone();
             let mut missing_slots = Vec::new();
-            for slot in &slots {
+            for slot in &layout.slots {
                 if !page_slots_for_merge.contains_key(&slot.name) {
                     missing_slots.push(slot.name.clone());
                     page_slots_for_merge
@@ -610,7 +546,7 @@ impl Compiler {
             if !missing_slots.is_empty() {
                 println!(
                     "[Normalize] Added missing slots in {}: {}",
-                    file_name,
+                    display_path,
                     missing_slots.join(", ")
                 );
             }
@@ -618,7 +554,7 @@ impl Compiler {
             if order_changed {
                 println!(
                     "[Normalize] Reordered slots to match layout for {}",
-                    file_name
+                    display_path
                 );
             }
 
@@ -626,7 +562,7 @@ impl Compiler {
             let had_trailing_newline = page_html.ends_with('\n') || page_html.ends_with("\r\n");
 
             let mut normalized_blocks = Vec::new();
-            for slot in &slots {
+            for slot in &layout.slots {
                 if let Some(content) = page_slots_for_merge.get(&slot.name) {
                     normalized_blocks.push(content.render());
                 }
@@ -653,7 +589,7 @@ impl Compiler {
 
                 match write_if_changed(&path, &final_text) {
                     Ok(true) => {
-                        println!("[Normalize] Wrote {}", file_name);
+                        println!("[Normalize] Wrote {}", display_path);
                     }
                     Ok(false) => {
                         // Already up to date; nothing to do.
@@ -667,19 +603,19 @@ impl Compiler {
             }
 
             // Build output by merging page slots into layout (string-based to preserve whitespace)
-            let mut output_html = layout_html.clone();
+            let mut output_html = layout.html.clone();
 
-            for slot in &slots {
+            for slot in &layout.slots {
                 if let Some(content) = page_slots_for_merge.get(&slot.name) {
                     output_html = self.merge_slot_string(&output_html, slot, content);
                 }
             }
 
-            let dest_path = self.out_dir.join(&file_name);
+            let dest_path = self.out_dir.join(&rel_path);
             let _ = fs::create_dir_all(dest_path.parent().unwrap());
             match write_if_changed(&dest_path, &output_html) {
-                Ok(true) => println!("✔  Built {}", file_name),
-                Ok(false) => println!("- Built {} (unchanged)", file_name),
+                Ok(true) => println!("✔  Built {}", display_path),
+                Ok(false) => println!("- Built {} (unchanged)", display_path),
                 Err(e) => {
                     eprintln!("[Error] {}", e);
                     overall_ok = false;
@@ -698,50 +634,118 @@ impl Compiler {
         overall_ok
     }
 
-    fn build_layout_aliases(&self) -> Vec<PathBuf> {
-        let mut aliases = vec![self.layout_path.clone()];
-        if let Ok(canonical) = self.layout_path.canonicalize() {
-            if !aliases.iter().any(|alias| *alias == canonical) {
-                aliases.push(canonical);
-            }
-        }
-        aliases
-    }
+    fn collect_page_paths(&self) -> Vec<PathBuf> {
+        let mut page_paths = Vec::new();
 
-    fn path_matches_layout(
-        &self,
-        path: &Path,
-        layout_aliases: &[PathBuf],
-        src_dir_canonical: &Path,
-    ) -> bool {
-        if layout_aliases
-            .iter()
-            .any(|alias| paths_equivalent(alias.as_path(), path))
+        for entry in WalkDir::new(&self.src_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
         {
-            return true;
-        }
-
-        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-            if file_name.eq_ignore_ascii_case("_layout.html") {
-                if let Some(parent) = path.parent() {
-                    if paths_equivalent(parent, src_dir_canonical)
-                        || paths_equivalent(parent, self.src_dir.as_path())
-                    {
-                        return true;
-                    }
-                }
+            let path = entry.path().to_path_buf();
+            if self.is_page_html(&path) {
+                page_paths.push(path);
             }
         }
 
-        false
+        page_paths.sort();
+        page_paths
     }
 
-    fn normalize_watch_path(
+    fn layout_for_page(
         &self,
-        path: &Path,
-        src_dir_canonical: &Path,
-        layout_aliases: &[PathBuf],
-    ) -> Option<PathBuf> {
+        page_path: &Path,
+        layout_cache: &mut HashMap<PathBuf, LayoutData>,
+    ) -> Result<LayoutData, String> {
+        let layout_path = self.resolve_layout_path(page_path).ok_or_else(|| {
+            let rel = page_path
+                .strip_prefix(&self.src_dir)
+                .unwrap_or(page_path)
+                .display()
+                .to_string();
+            format!("Missing _layout.html for {}", rel)
+        })?;
+
+        let cache_key = layout_path
+            .canonicalize()
+            .unwrap_or_else(|_| layout_path.clone());
+        if let Some(layout) = layout_cache.get(&cache_key) {
+            return Ok(layout.clone());
+        }
+
+        let layout = self.load_layout_data(&layout_path)?;
+        layout_cache.insert(cache_key, layout.clone());
+        Ok(layout)
+    }
+
+    fn resolve_layout_path(&self, page_path: &Path) -> Option<PathBuf> {
+        let mut current = page_path.parent()?;
+
+        loop {
+            if !current.starts_with(&self.src_dir) {
+                return None;
+            }
+
+            let candidate = current.join("_layout.html");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+
+            if current == self.src_dir {
+                return None;
+            }
+
+            current = current.parent()?;
+        }
+    }
+
+    fn load_layout_data(&self, layout_path: &Path) -> Result<LayoutData, String> {
+        let layout_html = self.expand_includes_in_file(layout_path)?;
+        let layout_doc = parse_html().one(layout_html.clone());
+
+        let mut slots = Vec::new();
+        for element in layout_doc.select("[slot]").unwrap() {
+            let node = element.as_node();
+            let attrs = node.as_element().unwrap().attributes.borrow();
+
+            let name = attrs.get("slot").unwrap_or("").to_string();
+            let mode = attrs.get("slot-mode").unwrap_or("html").to_string();
+            let layout_tag = node.as_element().unwrap().name.local.to_string();
+            let closing_style = determine_closing_style(&layout_html, &layout_tag, &name);
+
+            slots.push(SlotSpec {
+                name,
+                mode,
+                layout_tag,
+                closing_style,
+            });
+        }
+
+        if slots.is_empty() {
+            let rel = layout_path
+                .strip_prefix(&self.src_dir)
+                .unwrap_or(layout_path)
+                .display()
+                .to_string();
+            println!("[Warn] No slots in {}. Nothing to merge.", rel);
+        }
+
+        let layout_names = slots.iter().map(|slot| slot.name.clone()).collect();
+        Ok(LayoutData {
+            html: layout_html,
+            slots,
+            layout_names,
+        })
+    }
+
+    fn is_layout_file(&self, path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.eq_ignore_ascii_case("_layout.html"))
+            .unwrap_or(false)
+    }
+
+    fn normalize_watch_path(&self, path: &Path, src_dir_canonical: &Path) -> Option<PathBuf> {
         let mut candidate = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -760,7 +764,7 @@ impl Compiler {
             return None;
         }
 
-        if self.path_matches_layout(&candidate, layout_aliases, src_dir_canonical) {
+        if self.is_layout_file(&candidate) {
             return None;
         }
 
@@ -1195,7 +1199,6 @@ mod tests {
         Compiler {
             src_dir: src_dir.clone(),
             out_dir,
-            layout_path: src_dir.join("_layout.html"),
         }
     }
 
@@ -1206,7 +1209,7 @@ mod tests {
 
         fs::create_dir_all(compiler.src_dir.join("components")).unwrap();
         fs::write(
-            &compiler.layout_path,
+            &compiler.src_dir.join("_layout.html"),
             r#"
 <!DOCTYPE html>
 <html>
@@ -1271,7 +1274,7 @@ mod tests {
         let compiler = make_compiler(&root);
 
         fs::write(
-            &compiler.layout_path,
+            &compiler.src_dir.join("_layout.html"),
             r#"
 <!DOCTYPE html>
 <html>
@@ -1301,6 +1304,61 @@ mod tests {
         assert!(built.contains(r#"<meta content="Synthetic benchmark page 001" />"#));
         assert!(!built.contains(r#"/ content=""#));
         assert_eq!(built.matches("content=").count(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn builds_nested_pages_with_the_closest_layout() {
+        let root = make_temp_dir("nested-layout");
+        let compiler = make_compiler(&root);
+        let blog_dir = compiler.src_dir.join("blog");
+        let post_dir = blog_dir.join("posts");
+        fs::create_dir_all(&post_dir).unwrap();
+
+        fs::write(
+            &compiler.src_dir.join("_layout.html"),
+            r#"
+<!DOCTYPE html>
+<html>
+  <body>
+    <header slot="header"></header>
+    <main slot="content"></main>
+  </body>
+</html>
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            blog_dir.join("_layout.html"),
+            r#"
+<!DOCTYPE html>
+<html>
+  <body class="blog-shell">
+    <aside slot="header"></aside>
+    <article slot="content"></article>
+  </body>
+</html>
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            post_dir.join("post.html"),
+            r#"
+<section for-slot="header"><h1>Nested Post</h1></section>
+<section for-slot="content"><p>Rendered with the nearest layout.</p></section>
+"#,
+        )
+        .unwrap();
+
+        assert!(compiler.build_once(None));
+
+        let built = fs::read_to_string(compiler.out_dir.join("blog/posts/post.html")).unwrap();
+        assert!(built.contains(r#"<body class="blog-shell">"#));
+        assert!(built.contains(r#"<aside><h1>Nested Post</h1></aside>"#));
+        assert!(built.contains(r#"<article><p>Rendered with the nearest layout.</p></article>"#));
 
         let _ = fs::remove_dir_all(root);
     }
