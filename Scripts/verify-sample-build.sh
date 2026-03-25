@@ -18,9 +18,11 @@ cargo run --quiet --manifest-path rust/Cargo.toml -- sample/src "$OUT_DIR"
 [[ -f "$OUT_DIR/index.html" ]] || { echo "Missing built index.html"; exit 1; }
 [[ -f "$OUT_DIR/about.html" ]] || { echo "Missing built about.html"; exit 1; }
 [[ -f "$OUT_DIR/blah.html" ]] || { echo "Missing built blah.html"; exit 1; }
+[[ -f "$OUT_DIR/blog/posts/launch.html" ]] || { echo "Missing built nested blog/posts/launch.html"; exit 1; }
 [[ -f "$OUT_DIR/css/site.css" ]] || { echo "Missing copied CSS asset"; exit 1; }
 [[ -f "$OUT_DIR/js/site.js" ]] || { echo "Missing copied JS asset"; exit 1; }
 [[ ! -e "$OUT_DIR/components/home-callout.html" ]] || { echo "Component HTML should not be emitted"; exit 1; }
+[[ ! -e "$OUT_DIR/blog/_layout.html" ]] || { echo "Nested layout HTML should not be emitted"; exit 1; }
 
 grep -q '<title>Welcome</title>' "$OUT_DIR/index.html" || {
   echo "Built index.html is missing the merged title slot"
@@ -39,6 +41,26 @@ grep -q 'This content is included from a static HTML component\.' "$OUT_DIR/inde
 
 grep -q 'This is the home page with all the latest updates\.' "$OUT_DIR/index.html" || {
   echo "Built index.html is missing merged main content"
+  exit 1
+}
+
+grep -q '<body class="blog-shell">' "$OUT_DIR/blog/posts/launch.html" || {
+  echo "Built nested page did not use the nearest blog layout"
+  exit 1
+}
+
+grep -q '<aside>' "$OUT_DIR/blog/posts/launch.html" || {
+  echo "Built nested page is missing the blog header wrapper"
+  exit 1
+}
+
+grep -q '<h1>Launch Notes</h1>' "$OUT_DIR/blog/posts/launch.html" || {
+  echo "Built nested page is missing merged blog header content"
+  exit 1
+}
+
+grep -q 'This nested page should use the nearest blog layout\.' "$OUT_DIR/blog/posts/launch.html" || {
+  echo "Built nested page is missing merged blog content"
   exit 1
 }
 
