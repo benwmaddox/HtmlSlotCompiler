@@ -10,6 +10,7 @@ Cargo.lock
 /benchmarks/generated/
 /benchmarks/results/
 /dist/*.exe
+/Logs/
 
 # IDE
 .vscode/
